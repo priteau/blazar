@@ -173,9 +173,9 @@ function create_climate_accounts() {
         keystone endpoint-create \
             --region RegionOne \
             --service_id $CLIMATE_SERVICE \
-            --publicurl "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT/v1" \
-            --adminurl "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT/v1" \
-            --internalurl "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT/v1"
+            --publicurl "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT" \
+            --adminurl "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT" \
+            --internalurl "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT"
 
         KEYSTONEV3_SERVICE=$(keystone service-list \
                              | grep keystonev3 | get_field 1)
