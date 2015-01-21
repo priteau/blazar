@@ -87,6 +87,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             values['end_date'],
         )
         if not host_ids:
+            pool.delete(pool_name)
             raise manager_ex.NotEnoughHostsAvailable()
         for host_id in host_ids:
             db_api.host_allocation_create({'compute_host_id': host_id,
@@ -184,12 +185,16 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             pool = rp.ReservationPool()
             for allocation in allocations:
                 db_api.host_allocation_destroy(allocation['id'])
-                if self.nova.hypervisors.get(
+                hyp = self.nova.hypervisors.get(
                         self._get_hypervisor_from_name_or_id(
                         allocation['compute_host_id'])
-                ).__dict__['running_vms'] == 0:
-                    pool.delete(reservation['resource_id'])
-                # TODO(frossigneux) Kill, migrate, or increase fees...
+                )
+                if hyp.__dict__['running_vms'] > 0:
+                    hyp = self.nova.hypervisors.search(hyp.__dict__['hypervisor_hostname'], servers=True)
+                    for server in hyp[0].__dict__['servers']:
+                        s = self.nova.servers.get(server['uuid'])
+                        s.delete()
+            pool.delete(reservation['resource_id'])
 
     def _get_extra_capabilities(self, host_id):
         extra_capabilities = {}
