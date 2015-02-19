@@ -163,9 +163,9 @@ function create_climate_accounts() {
             "reservation" "Climate Reservations Service")
         get_or_create_endpoint $CLIMATE_SERVICE \
             "$REGION_NAME" \
-            "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT/v1" \
-            "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT/v1" \
-            "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT/v1"
+            "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT" \
+            "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT" \
+            "$CLIMATE_SERVICE_PROTOCOL://$CLIMATE_SERVICE_HOST:$CLIMATE_SERVICE_PORT"
 
         KEYSTONEV3_SERVICE=$(get_or_create_service "keystonev3" \
             "identityv3" "Keystone Identity Service V3")
