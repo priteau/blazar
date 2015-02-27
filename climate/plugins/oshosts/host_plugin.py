@@ -70,6 +70,20 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             'status': 'pending',
         }
         reservation = db_api.reservation_create(reservation_values)
+        min_host = values['min']
+        max_host = values['max']
+        if not min_host:
+            raise manager_ex.MissingParameter(param="min")
+        if not max_host:
+            raise manager_ex.MissingParameter(param="max")
+        try:
+            min_host = int(str(min_host))
+        except ValueError:
+            raise manager_ex.MalformedParameter(param="min")
+        try:
+            max_host = int(str(max_host))
+        except ValueError:
+            raise manager_ex.MalformedParameter(param="max")
         count_range = str(values['min']) + '-' + str(values['max'])
         host_values = {
             'reservation_id': reservation['id'],

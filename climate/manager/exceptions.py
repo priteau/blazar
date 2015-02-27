@@ -145,3 +145,13 @@ class InvalidStateUpdate(InvalidState):
 
 class ProjectIdNotFound(exceptions.ClimateException):
     msg_fmt = _("No project_id found in current context")
+
+
+class MalformedParameter(exceptions.ClimateException):
+    code = 400
+    msg_fmt = _("Malformed parameter %(param)s")
+
+
+class MissingParameter(exceptions.ClimateException):
+    code = 400
+    msg_fmt = _("Missing parameter %(param)s")
