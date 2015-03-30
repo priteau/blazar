@@ -51,8 +51,8 @@ class Lease(mb.ClimateBase):
     __tablename__ = 'leases'
 
     __table_args__ = (
-        sa.UniqueConstraint('name', 'project_id',
-                            name='uniq_leases0name0project_id'),
+        sa.UniqueConstraint('name', 'project_id', 'deleted',
+                            name='uniq_leases0name0project_id0deleted'),
     )
 
     id = _id_column()
