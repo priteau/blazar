@@ -27,6 +27,7 @@ from climate.db.sqlalchemy import models
 from climate.openstack.common.db import exception as common_db_exc
 from climate.openstack.common.db import options as db_options
 from climate.openstack.common.db.sqlalchemy import session as db_session
+from climate.openstack.common.db.sqlalchemy.utils import _read_deleted_filter
 from climate.openstack.common.gettextutils import _
 from climate.openstack.common import log as logging
 
@@ -42,7 +43,7 @@ def get_backend():
     return sys.modules[__name__]
 
 
-def model_query(model, session=None):
+def model_query(model, session=None, read_deleted='no'):
     """Query helper.
 
     :param model: base model to query
@@ -51,7 +52,9 @@ def model_query(model, session=None):
     """
     session = session or get_session()
 
-    return session.query(model)
+    query = session.query(model)
+    query = _read_deleted_filter(query, model, read_deleted)
+    return query
 
 
 def setup_db():
@@ -188,6 +191,20 @@ def reservation_destroy(reservation_id):
             raise db_exc.ClimateDBNotFound(id=reservation_id,
                                            model='Reservation')
 
+        # XXX For some reason when running test_delete_host_reservation,
+        # computehost_reservations is not a list but a ComputeHostReservation
+        # object.
+        if reservation.computehost_reservations is not None:
+            if isinstance(reservation.computehost_reservations, list):
+                for computehost_reservation in reservation.computehost_reservations:
+                    computehost_reservation.soft_delete(session=session)
+            else:
+                reservation.computehost_reservations.soft_delete(session=session)
+
+        if reservation.computehost_allocations is not None:
+            for computehost_allocation in reservation.computehost_allocations:
+                computehost_allocation.soft_delete(session=session)
+
         session.delete(reservation)
 
 
@@ -282,7 +299,13 @@ def lease_destroy(lease_id):
             # raise not found error
             raise db_exc.ClimateDBNotFound(id=lease_id, model='Lease')
 
-        session.delete(lease)
+        for reservation in lease.reservations:
+            reservation.soft_delete(session=session)
+
+        for event in lease.events:
+            event.soft_delete(session=session)
+
+        lease.soft_delete(session=session)
 
 
 # Event
