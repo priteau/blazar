@@ -19,7 +19,17 @@ from sqlalchemy.orm import attributes
 from climate.openstack.common.db.sqlalchemy import models as oslo_models
 
 
-class _ClimateBase(oslo_models.ModelBase, oslo_models.SoftDeleteMixin,
+class SoftDeleteMixinWithUuid(object):
+    deleted_at = Column(DateTime)
+    deleted = Column(sa.String(36), default=None)
+
+    def soft_delete(self, session):
+        """Mark this object as deleted."""
+        self.deleted = self.id
+        self.deleted_at = timeutils.utcnow()
+        self.save(session=session)
+
+class _ClimateBase(oslo_models.ModelBase, oslo_models.SoftDeleteMixinWithUuid,
                    oslo_models.TimestampMixin):
     """Base class for all Climate SQLAlchemy DB Models."""
 
