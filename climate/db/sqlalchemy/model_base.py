@@ -19,7 +19,8 @@ from sqlalchemy.orm import attributes
 from climate.openstack.common.db.sqlalchemy import models as oslo_models
 
 
-class _ClimateBase(oslo_models.ModelBase, oslo_models.TimestampMixin):
+class _ClimateBase(oslo_models.ModelBase, oslo_models.SoftDeleteMixin,
+                   oslo_models.TimestampMixin):
     """Base class for all Climate SQLAlchemy DB Models."""
 
     def to_dict(self):
