@@ -31,7 +31,16 @@ nova_opts = [
                help='Nova name in keystone'),
     cfg.StrOpt('image_prefix',
                default='reserved_',
-               help='Prefix for VM images if you want to create snapshots')
+               help='Prefix for VM images if you want to create snapshots'),
+    cfg.StrOpt('climate_username',
+               default='climate_admin',
+               help='Name of the user for write operations'),
+    cfg.StrOpt('climate_password',
+               default='climate_password',
+               help='Password of the user for write operations'),
+    cfg.StrOpt('climate_project_name',
+               default='admin',
+               help='Project of the user for write operations')
 ]
 
 CONF = cfg.CONF
@@ -73,11 +82,13 @@ class ClimateNovaClient(object):
         auth_token = kwargs.pop('auth_token', None)
         mgmt_url = kwargs.pop('mgmt_url', None)
 
-        if ctx is None:
-            try:
-                ctx = context.current()
-            except RuntimeError:
-                pass
+        # Don't use existing context so that we can use admin credentials instead
+        #if ctx is None:
+        #    try:
+        #        ctx = context.current()
+        #        print "!!!! set ctx to " + str(ctx)
+        #    except RuntimeError:
+        #        pass
         kwargs.setdefault('version', cfg.CONF.nova_client_version)
         if ctx is not None:
             kwargs.setdefault('username', ctx.user_name)
@@ -135,9 +146,7 @@ class ServerManager(servers.ServerManager):
 class NovaClientWrapper(object):
     @property
     def nova(self):
-        ctx = context.current()
-        nova = ClimateNovaClient(username=ctx.user_name,
-                                 api_key=None,
-                                 project_id=ctx.project_id,
-                                 ctx=ctx)
+        nova = ClimateNovaClient(username=CONF.climate_username,
+                                 api_key=CONF.climate_password,
+                                 project_id=CONF.climate_project_name)
         return nova
