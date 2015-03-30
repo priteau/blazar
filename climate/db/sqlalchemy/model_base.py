@@ -13,15 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sqlalchemy as sa
+from sqlalchemy import Column
+from sqlalchemy import DateTime
 from sqlalchemy.ext import declarative
 from sqlalchemy.orm import attributes
 
+from climate.openstack.common import timeutils
 from climate.openstack.common.db.sqlalchemy import models as oslo_models
 
 
 class SoftDeleteMixinWithUuid(object):
     deleted_at = Column(DateTime)
-    deleted = Column(sa.String(36), default=None)
+    deleted = Column(sa.String(36), default="0")
 
     def soft_delete(self, session):
         """Mark this object as deleted."""
@@ -29,8 +33,8 @@ class SoftDeleteMixinWithUuid(object):
         self.deleted_at = timeutils.utcnow()
         self.save(session=session)
 
-class _ClimateBase(oslo_models.ModelBase, oslo_models.SoftDeleteMixinWithUuid,
-                   oslo_models.TimestampMixin):
+class _ClimateBase(oslo_models.ModelBase, oslo_models.TimestampMixin,
+                   SoftDeleteMixinWithUuid):
     """Base class for all Climate SQLAlchemy DB Models."""
 
     def to_dict(self):
@@ -48,6 +52,10 @@ class _ClimateBase(oslo_models.ModelBase, oslo_models.SoftDeleteMixinWithUuid,
 
         datetime_to_str(d, 'created_at')
         datetime_to_str(d, 'updated_at')
+
+        # Don't show fields created by SoftDeleteMixinWithUuid
+        del d['deleted']
+        del d['deleted_at']
 
         return d
 
