@@ -38,6 +38,7 @@ def _get_leases_from_resource_id(resource_id, start_date, end_date):
                       models.Lease.end_date > end_date)
     query = (session.query(models.Lease).join(models.Reservation)
              .filter(models.Reservation.resource_id == resource_id)
+             .filter(models.Reservation.deleted == '0')
              .filter(~sa.or_(border0, border1)))
     for lease in query:
         yield lease
@@ -52,6 +53,7 @@ def _get_leases_from_host_id(host_id, start_date, end_date):
     query = (session.query(models.Lease).join(models.Reservation)
              .join(models.ComputeHostAllocation)
              .filter(models.ComputeHostAllocation.compute_host_id == host_id)
+             .filter(models.ComputeHostAllocation.deleted == '0')
              .filter(~sa.or_(border0, border1)))
     for lease in query:
         yield lease
