@@ -24,6 +24,7 @@ from climate.db import api as db_api
 from climate.db import exceptions as db_ex
 from climate import exceptions as common_ex
 from climate import manager
+from climate import states
 from climate.manager import exceptions
 from climate.notification import api as notification_api
 from climate.openstack.common.gettextutils import _
@@ -273,6 +274,11 @@ class ManagerService(service_utils.RPCServer):
                     raise
 
                 else:
+                    lease_state = states.LeaseState(id=lease['id'],
+                            action=states.lease.CREATE,
+                            status=states.lease.COMPLETE,
+                            status_reason="Successfully created lease")
+                    lease_state.save()
                     lease = db_api.lease_get(lease['id'])
                     self._send_notification(lease, ctx, events=['create'])
                     return lease
@@ -380,6 +386,11 @@ class ManagerService(service_utils.RPCServer):
 
         db_api.lease_update(lease_id, values)
 
+        lease_state = states.LeaseState(id=lease_id,
+                action=states.lease.UPDATE,
+                status=states.lease.COMPLETE,
+                status_reason="Successfully updated lease")
+        lease_state.save()
         lease = db_api.lease_get(lease_id)
         with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
             self._send_notification(lease, ctx, events=notifications)
@@ -396,14 +407,24 @@ class ManagerService(service_utils.RPCServer):
                     try:
                         plugin.on_end(reservation['resource_id'])
                     except (db_ex.ClimateDBException, RuntimeError):
-                        LOG.exception("Failed to delete a reservation "
-                                      "for a lease.")
+                        error_msg = "Failed to delete a reservation for a lease."
+                        lease_state = states.LeaseState(id=lease_id,
+                                action=states.lease.DELETE,
+                                status=states.lease.FAILED,
+                                status_reason=error_msg)
+                        lease_state.save()
+                        LOG.exception(error_msg)
                         raise
                 db_api.lease_destroy(lease_id)
                 self._send_notification(lease, ctx, events=['delete'])
         else:
-            raise common_ex.NotAuthorized(
-                'Already started lease cannot be deleted')
+            error_msg = "Already started lease cannot be deleted"
+            lease_state = states.LeaseState(id=lease_id,
+                    action=states.lease.DELETE,
+                    status=states.lease.FAILED,
+                    status_reason=error_msg)
+            lease_state.save()
+            raise common_ex.NotAuthorized(error_msg)
 
     def start_lease(self, lease_id, event_id):
         lease = self.get_lease(lease_id)
@@ -424,6 +445,22 @@ class ManagerService(service_utils.RPCServer):
         lease = self.get_lease(lease_id)
 
         event_status = 'DONE'
+
+        if action_time == 'on_start':
+            lease_action = states.lease.START
+            status_reason = "Starting lease..."
+        elif action_time == 'on_end':
+            lease_action = states.lease.STOP
+            status_reason = "Stopping lease..."
+        else:
+            raise AttributeError("action_time is %s instead of either on_start or on_end"
+                                 % action_time)
+
+        lease_state = states.LeaseState(id=lease_id, action=lease_action,
+                status=states.lease.IN_PROGRESS,
+                status_reason=status_reason)
+        lease_state.save()
+
         for reservation in lease['reservations']:
             resource_type = reservation['resource_type']
             try:
@@ -446,6 +483,33 @@ class ManagerService(service_utils.RPCServer):
                                               {'status': reservation_status})
 
         db_api.event_update(event_id, {'status': event_status})
+
+        if event_status == 'DONE':
+            lease_status = states.lease.COMPLETE
+            if action_time ==  'on_start':
+                status_reason = "Successfully started lease"
+            elif action_time == 'on_end':
+                status_reason = "Successfully stopped lease"
+            else:
+                raise AttributeError("action_time is %s instead of either on_start or on_end"
+                                     % action_time)
+        elif event_status == 'ERROR':
+            lease_status = states.lease.FAILED
+            if action_time ==  'on_start':
+                status_reason = "Failed to start lease"
+            elif action_time == 'on_end':
+                status_reason = "Failed to stop lease"
+            else:
+                raise AttributeError("action_time is %s instead of either on_start or on_end"
+                                     % action_time)
+        else:
+            raise AttributeError("event_status is %s instead of either DONE or ERROR"
+                                 % event_status)
+
+        lease_state.update(action=lease_action,
+                           status=lease_status,
+                           status_reason=status_reason)
+        lease_state.save()
 
     def _send_notification(self, lease, ctx, events=[]):
         payload = notification_api.format_lease_payload(lease)
