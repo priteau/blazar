@@ -528,6 +528,25 @@ class SQLAlchemyDBApiTestCase(tests.DBTestCase):
                                             'vgpu == 2'])))
         self.assertRaises(db_exceptions.ClimateDBNotFound,
                           db_api.host_get_all_by_queries, ['apples < 2048'])
+        db_api.host_create(_get_fake_host_values(id=2))
+        self.assertEqual(1, len(
+            db_api.host_get_all_by_queries(['vgpu == 2'])))
+        self.assertEqual(0, len(
+            db_api.host_get_all_by_queries(['vgpu != 2'])))
+        self.assertEqual(1, len(
+            db_api.host_get_all_by_queries(['cpu_info like %Westmere%',
+                                            'vgpu == 2'])))
+        self.assertEqual(0, len(
+            db_api.host_get_all_by_queries(['cpu_info like %wrongcpu%',
+                                            'vgpu == 2'])))
+        self.assertEqual(0, len(
+            db_api.host_get_all_by_queries(['cpu_info like %Westmere%',
+                                            'vgpu != 2'])))
+        self.assertEqual(0, len(
+            db_api.host_get_all_by_queries(['cpu_info like %wrongcpu%',
+                                            'vgpu != 2'])))
+        self.assertRaises(db_exceptions.ClimateDBNotFound,
+                          db_api.host_get_all_by_queries, ['apples < 2048'])
 
     def test_search_for_hosts_by_composed_queries(self):
         """Create one host and test composed queries."""
