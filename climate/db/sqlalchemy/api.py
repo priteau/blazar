@@ -632,6 +632,12 @@ def host_get_all_by_queries(queries):
                 raise db_exc.ClimateDBNotFound(
                     id=key, model='ComputeHostExtraCapability')
 
+            # We must also avoid selecting any host which doesn't have the extra capability at all
+            extra_filter_host_ids = [host.computehost_id for host in extra_filter]
+            all_host_ids = [host.id for host in hosts_query.all()]
+            no_extra_cap_hosts = [host for host in all_host_ids if host not in extra_filter_host_ids]
+            hosts += no_extra_cap_hosts
+
             for host in extra_filter:
                 if op in oper and oper[op][1](host.capability_value, value):
                     hosts.append(host.computehost_id)
