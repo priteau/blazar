@@ -399,32 +399,22 @@ class ManagerService(service_utils.RPCServer):
 
     def delete_lease(self, lease_id):
         lease = self.get_lease(lease_id)
-        if (datetime.datetime.utcnow() < lease['start_date'] or
-                datetime.datetime.utcnow() > lease['end_date']):
-            with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
-                for reservation in lease['reservations']:
-                    plugin = self.plugins[reservation['resource_type']]
-                    try:
-                        plugin.on_end(reservation['resource_id'])
-                    except (db_ex.ClimateDBException, RuntimeError):
-                        error_msg = "Failed to delete a reservation for a lease."
-                        lease_state = states.LeaseState(id=lease_id,
-                                action=states.lease.DELETE,
-                                status=states.lease.FAILED,
-                                status_reason=error_msg)
-                        lease_state.save()
-                        LOG.exception(error_msg)
-                        raise
-                db_api.lease_destroy(lease_id)
-                self._send_notification(lease, ctx, events=['delete'])
-        else:
-            error_msg = "Already started lease cannot be deleted"
-            lease_state = states.LeaseState(id=lease_id,
-                    action=states.lease.DELETE,
-                    status=states.lease.FAILED,
-                    status_reason=error_msg)
-            lease_state.save()
-            raise common_ex.NotAuthorized(error_msg)
+        with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
+            for reservation in lease['reservations']:
+                plugin = self.plugins[reservation['resource_type']]
+                try:
+                    plugin.on_end(reservation['resource_id'])
+                except (db_ex.ClimateDBException, RuntimeError):
+                    error_msg = "Failed to delete a reservation for a lease."
+                    lease_state = states.LeaseState(id=lease_id,
+                            action=states.lease.DELETE,
+                            status=states.lease.FAILED,
+                            status_reason=error_msg)
+                    lease_state.save()
+                    LOG.exception(error_msg)
+                    raise
+            db_api.lease_destroy(lease_id)
+            self._send_notification(lease, ctx, events=['delete'])
 
     def start_lease(self, lease_id, event_id):
         lease = self.get_lease(lease_id)
