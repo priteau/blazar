@@ -48,6 +48,8 @@ class API(object):
         :param data: New lease characteristics.
         :type data: dict
         """
+        ctx = context.current()
+        data['user_id'] = ctx.user_id
         return self.manager_rpcapi.create_lease(data)
 
     @policy.authorize('leases', 'get')
