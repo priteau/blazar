@@ -205,7 +205,7 @@ def reservation_destroy(reservation_id):
             for computehost_allocation in reservation.computehost_allocations:
                 computehost_allocation.soft_delete(session=session)
 
-        session.delete(reservation)
+        reservation.soft_delete(session=session)
 
 
 # Lease
@@ -404,7 +404,7 @@ def event_destroy(event_id):
             # raise not found error
             raise db_exc.ClimateDBNotFound(id=event_id, model='Event')
 
-        session.delete(event)
+        event.soft_delete(session=session)
 
 
 # ComputeHostReservation
@@ -473,7 +473,7 @@ def host_reservation_destroy(host_reservation_id):
             raise db_exc.ClimateDBNotFound(
                 id=host_reservation_id, model='ComputeHostReservation')
 
-        session.delete(host_reservation)
+        host_reservation.soft_delete(session=session)
 
 
 # ComputeHostAllocation
@@ -542,7 +542,7 @@ def host_allocation_destroy(host_allocation_id):
             raise db_exc.ClimateDBNotFound(
                 id=host_allocation_id, model='ComputeHostAllocation')
 
-        session.delete(host_allocation)
+        host_allocation.soft_delete(session=session)
 
 
 # ComputeHost
@@ -685,7 +685,7 @@ def host_destroy(host_id):
             # raise not found error
             raise db_exc.ClimateDBNotFound(id=host_id, model='Host')
 
-        session.delete(host)
+        host_destroy.soft_delete(session=session)
 
 
 # ComputeHostExtraCapability
@@ -753,7 +753,7 @@ def host_extra_capability_destroy(host_extra_capability_id):
                 id=host_extra_capability_id,
                 model='ComputeHostExtraCapability')
 
-        session.delete(host_extra_capability)
+        host_extra_capability.soft_delete(session=session)
 
 
 def host_extra_capability_get_all_per_name(host_id, capability_name):
