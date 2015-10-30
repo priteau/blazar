@@ -188,7 +188,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
         reservations = db_api.reservation_get_all_by_values(
             resource_id=resource_id)
         for reservation in reservations:
-            if reservation['status'] not in ['completed', 'deleted']:
+            if reservation['status'] == 'active':
                 allocations = db_api.host_allocation_get_all_by_values(
                     reservation_id=reservation['id'])
                 pool = rp.ReservationPool()
