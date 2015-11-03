@@ -188,12 +188,12 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
         reservations = db_api.reservation_get_all_by_values(
             resource_id=resource_id)
         for reservation in reservations:
-            if reservation['status'] == 'active':
-                allocations = db_api.host_allocation_get_all_by_values(
-                    reservation_id=reservation['id'])
-                pool = rp.ReservationPool()
-                for allocation in allocations:
-                    db_api.host_allocation_destroy(allocation['id'])
+            allocations = db_api.host_allocation_get_all_by_values(
+                reservation_id=reservation['id'])
+            pool = rp.ReservationPool()
+            for allocation in allocations:
+                db_api.host_allocation_destroy(allocation['id'])
+                if reservation['status'] == 'active':
                     hyp = self.nova.hypervisors.get(
                             self._get_hypervisor_from_name_or_id(
                             allocation['compute_host_id'])
@@ -203,6 +203,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                         for server in hyp[0].__dict__['servers']:
                             s = self.nova.servers.get(server['uuid'])
                             s.delete()
+            if reservation['status'] == 'active':
                 pool.delete(reservation['resource_id'])
 
             db_api.reservation_update(reservation['id'],
