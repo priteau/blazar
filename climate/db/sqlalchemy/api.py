@@ -685,7 +685,7 @@ def host_destroy(host_id):
             # raise not found error
             raise db_exc.ClimateDBNotFound(id=host_id, model='Host')
 
-        host_destroy.soft_delete(session=session)
+        session.delete(host)
 
 
 # ComputeHostExtraCapability
