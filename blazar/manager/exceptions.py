@@ -68,6 +68,10 @@ class HostHavingServers(exceptions.BlazarException):
     msg_fmt = _("Servers [%(servers)s] found for host %(host)s")
 
 
+class ConfigurationError(exceptions.BlazarException):
+    msg_fmt = _("Configuration error : %(error)s")
+
+
 class PluginConfigurationError(exceptions.BlazarException):
     msg_fmt = _("Plugin Configuration error : %(error)s")
 

@@ -40,7 +40,15 @@ manager_opts = [
                default=60,
                help='Minutes prior to the end of a lease in which actions '
                     'like notification and snapshot are taken. If this is '
-                    'set to 0, then these actions are not taken.')
+                    'set to 0, then these actions are not taken.'),
+    cfg.IntOpt('default_max_lease_duration',
+               default=-1,
+               help='Maximum lease duration in seconds. If '
+                    'this is set to -1, there is not limit'),
+    cfg.ListOpt('project_max_lease_durations',
+                default=[],
+                help='Maximum lease durations overriding the default for specific projects. '
+                     'Syntax is a comma-separated list of <project_id>:<seconds> pairs.')
 ]
 
 CONF = cfg.CONF
@@ -62,6 +70,7 @@ class ManagerService(service_utils.RPCServer):
         super(ManagerService, self).__init__(target)
         self.plugins = self._get_plugins()
         self.resource_actions = self._setup_actions()
+        self.project_max_lease_durations = self._get_project_max_lease_durations()
 
     def start(self):
         super(ManagerService, self).start()
@@ -168,6 +177,38 @@ class ManagerService(service_utils.RPCServer):
 
         return date
 
+    def _get_project_max_lease_durations(self):
+        max_durations = {}
+        max_durations_config = CONF.manager.project_max_lease_durations
+
+        for kv in max_durations_config:
+            try:
+                project_id, seconds = kv.split(':')
+                max_durations[project_id] = int(seconds)
+            except ValueError:
+                msg = "%s is not a valid project:max_duration pair" % kv
+                raise exceptions.ConfigurationError(error=msg)
+        return max_durations
+
+    def _check_lease_duration_limit(self, lease_values):
+        start_date = lease_values['start_date']
+        end_date = lease_values['end_date']
+        project_id = lease_values['project_id']
+
+        if project_id in self.project_max_lease_durations:
+            project_max_lease_duration = self.project_max_lease_durations[project_id]
+            lease_duration = end_date - start_date
+            if project_max_lease_duration != -1:
+                if (lease_duration.days * 86400 + lease_duration.seconds) > project_max_lease_duration:
+                    raise common_ex.NotAuthorized(
+                        'Lease is longer than maximum allowed of %d seconds for project %s' %
+                        (project_max_lease_duration, project_id))
+        elif CONF.manager.default_max_lease_duration != -1:
+            lease_duration = end_date - start_date
+            if (lease_duration.days * 86400 + lease_duration.seconds) > CONF.manager.default_max_lease_duration:
+                raise common_ex.NotAuthorized(
+                    'Lease is longer than maximum allowed of %d seconds' % CONF.manager.default_max_lease_duration)
+
     def get_lease(self, lease_id):
         return db_api.lease_get(lease_id)
 
@@ -216,12 +257,14 @@ class ManagerService(service_utils.RPCServer):
             lease_values['start_date'] = start_date
             lease_values['end_date'] = end_date
 
-            events.append({'event_type': 'start_lease',
-                           'time': start_date,
-                           'status': 'UNDONE'})
-            events.append({'event_type': 'end_lease',
-                           'time': end_date,
-                           'status': 'UNDONE'})
+            self._check_lease_duration_limit(lease_values)
+
+	    events.append({'event_type': 'start_lease',
+			   'time': start_date,
+			   'status': 'UNDONE'})
+	    events.append({'event_type': 'end_lease',
+			   'time': end_date,
+			   'status': 'UNDONE'})
 
             before_end_date = lease_values.get('before_end_date', None)
             if before_end_date:
@@ -348,7 +391,9 @@ class ManagerService(service_utils.RPCServer):
             raise common_ex.NotAuthorized(
                 'End date must be later than current and start date')
 
-        with trusts.create_ctx_from_trust(lease['trust_id']):
+        with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
+            values['project_id'] = ctx.project_id
+
             if before_end_date:
                 try:
                     before_end_date = self._date_from_string(before_end_date)
@@ -357,6 +402,8 @@ class ManagerService(service_utils.RPCServer):
                 except common_ex.BlazarException as e:
                     LOG.error("Invalid before_end_date param. %s" % e.message)
                     raise e
+
+            self._check_lease_duration_limit(values)
 
             # TODO(frossigneux) rollback if an exception is raised
             for reservation in (
