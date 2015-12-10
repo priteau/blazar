@@ -68,6 +68,10 @@ class HostHavingServers(exceptions.ClimateException):
     msg_fmt = _("Servers [%(servers)s] found for host %(host)s")
 
 
+class ConfigurationError(exceptions.ClimateException):
+    msg_fmt = _("Configuration error : %(error)s")
+
+
 class PluginConfigurationError(exceptions.ClimateException):
     msg_fmt = _("Plugin Configuration error : %(error)s")
 

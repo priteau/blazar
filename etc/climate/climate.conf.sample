@@ -721,6 +721,15 @@
 # (list value)
 #plugins=dummy.vm.plugin
 
+# Maximum lease duration in seconds. If this is set to -1,
+# there is not limit. (integer value)
+#default_max_lease_duration=-1
+
+# Maximum lease durations overriding the default for
+# specific projects. Syntax is a comma-separated list of
+# <project_id>:<seconds> pairs.  (list value)
+#project_max_lease_durations=
+
 # Number of hours prior to lease end in which a notification
 # of lease close to expire will be sent. If this is set to 0,
 # then this notification will not be sent. (integer value)

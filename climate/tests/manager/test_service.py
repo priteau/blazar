@@ -555,6 +555,409 @@ class ServiceTestCase(tests.TestCase):
         self.assertRaises(manager_ex.MissingTrustId,
                           self.manager.create_lease, lease_values)
 
+    def test_create_lease_no_limit(self):
+        lease_values = {
+            'name': 'name',
+            'start_date': '2026-11-13 13:13',
+            'end_date': '2026-12-13 13:13',
+            'trust_id': 'exxee111qwwwwe'}
+
+        self.cfg.CONF.set_override('default_max_lease_duration', -1,
+                                   group='manager')
+
+        lease = self.manager.create_lease(lease_values)
+
+        self.lease_create.assert_called_once_with(lease_values)
+        self.assertEqual(lease, self.lease)
+        self.assertEqual(3, len(lease_values['events']))
+
+    def test_create_lease_longer_than_limit(self):
+        lease_values = {
+            'name': 'name',
+            'start_date': '2026-11-13 13:13',
+            'end_date': '2026-11-20 13:13',
+            'trust_id': 'exxee111qwwwwe'}
+
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        lease = self.manager.create_lease(lease_values)
+
+        self.lease_create.assert_called_once_with(lease_values)
+        self.assertEqual(lease, self.lease)
+        self.assertEqual(3, len(lease_values['events']))
+
+        lease_values = {
+            'name': 'name',
+            'start_date': '2026-11-13 13:13',
+            'end_date': '2026-11-20 13:14',
+            'trust_id': 'exxee111qwwwwe'}
+
+        self.assertRaises(exceptions.NotAuthorized,
+                          self.manager.create_lease, lease_values)
+
+    def test_wrong_lease_duration_config(self):
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:86400:1234'],
+                                   group='manager')
+
+        self.assertRaises(manager_ex.ConfigurationError,
+                          self.manager._get_project_max_lease_durations)
+
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:86400a'],
+                                   group='manager')
+
+        self.assertRaises(manager_ex.ConfigurationError,
+                          self.manager._get_project_max_lease_durations)
+
+    def test_create_lease_longer_than_project_specific_limit(self):
+        # One week default limit
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        # Two weeks limit for project '555'
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:1209600'],
+                                   group='manager')
+
+        self.manager.project_max_lease_durations = self.manager._get_project_max_lease_durations()
+
+        expected_context = self.trust_ctx.return_value
+        with mock.patch.object(expected_context.__enter__.return_value,
+                               'project_id',
+                               '555') as patched:
+
+            # Lease lasting two weeks
+            lease_values = {
+                'name': 'name',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-11-27 13:13',
+                'trust_id': 'exxee111qwwwwe'}
+
+            lease = self.manager.create_lease(lease_values)
+
+            self.lease_create.assert_called_once_with(lease_values)
+            self.assertEqual(lease, self.lease)
+            self.assertEqual(3, len(lease_values['events']))
+
+            # Lease lasting two weeks and one minute
+            lease_values = {
+                'name': 'name2',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-11-27 13:14',
+                'trust_id': 'exxee111qwwwwe'}
+
+            self.assertRaises(exceptions.NotAuthorized,
+                              self.manager.create_lease, lease_values)
+
+            # Testing smaller project-specific limit than default value of three weeks
+            self.cfg.CONF.set_override('default_max_lease_duration', 1814400,
+                                       group='manager')
+
+            # Lease lasting two weeks and one minute
+            lease_values = {
+                'name': 'name2',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-11-27 13:14',
+                'trust_id': 'exxee111qwwwwe'}
+
+            self.assertRaises(exceptions.NotAuthorized,
+                              self.manager.create_lease, lease_values)
+
+    def test_create_lease_with_unlimited_project(self):
+        # One week default limit
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        # No limit for project '555'
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:-1'],
+                                   group='manager')
+
+        self.manager.project_max_lease_durations = self.manager._get_project_max_lease_durations()
+
+        expected_context = self.trust_ctx.return_value
+        with mock.patch.object(expected_context.__enter__.return_value,
+                               'project_id',
+                               '555') as patched:
+
+            # Lease lasting one year
+            lease_values = {
+                'name': 'name',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2027-11-13 13:13',
+                'trust_id': 'exxee111qwwwwe'}
+
+            lease = self.manager.create_lease(lease_values)
+
+            self.lease_create.assert_called_once_with(lease_values)
+            self.assertEqual(lease, self.lease)
+            self.assertEqual(3, len(lease_values['events']))
+
+    def test_update_lease_no_limit(self):
+        self.cfg.CONF.set_override('default_max_lease_duration', -1,
+                                   group='manager')
+
+        def fake_event_get(sort_key, sort_dir, filters):
+            if filters['event_type'] == 'start_lease':
+                return {'id': u'2eeb784a-2d84-4a89-a201-9d42d61eecb1'}
+            elif filters['event_type'] == 'end_lease':
+                return {'id': u'7085381b-45e0-4e5d-b24a-f965f5e6e5d7'}
+            elif filters['event_type'] == 'before_end_lease':
+                delta = datetime.timedelta(hours=1)
+                return {'id': u'452bf850-e223-4035-9d13-eb0b0197228f',
+                        'time': self.lease['end_date'] - delta,
+                        'status': 'UNDONE'}
+
+        lease_values = {
+            'name': 'renamed',
+            'start_date': '2015-12-01 20:00',
+            'end_date': '2015-12-01 22:00'
+        }
+        reservation_get_all = (
+            self.patch(self.db_api, 'reservation_get_all_by_lease_id'))
+        reservation_get_all.return_value = [
+            {
+                'id': u'593e7028-c0d1-4d76-8642-2ffd890b324c',
+                'resource_type': 'virtual:instance',
+                'start_date': datetime.datetime(2013, 12, 20, 20, 00),
+                'end_date': datetime.datetime(2013, 12, 20, 21, 00)
+            }
+        ]
+        event_get = self.patch(db_api, 'event_get_first_sorted_by_filters')
+        event_get.side_effect = fake_event_get
+        target = datetime.datetime(2013, 12, 15)
+        with mock.patch.object(datetime,
+                               'datetime',
+                               mock.Mock(wraps=datetime.datetime)) as patched:
+            expected_context = self.trust_ctx.return_value
+            patched.utcnow.return_value = target
+            with mock.patch.object(expected_context.__enter__.return_value,
+                                   'project_id',
+                                   '555') as patched_context:
+                self.manager.update_lease(self.lease_id, lease_values)
+        self.fake_plugin.update_reservation.assert_called_with(
+            '593e7028-c0d1-4d76-8642-2ffd890b324c',
+            {
+                'id': '593e7028-c0d1-4d76-8642-2ffd890b324c',
+                'resource_type': 'virtual:instance',
+                'start_date': datetime.datetime(2015, 12, 1, 20, 00),
+                'end_date': datetime.datetime(2015, 12, 1, 22, 00)
+            }
+        )
+        calls = [mock.call('2eeb784a-2d84-4a89-a201-9d42d61eecb1',
+                           {'time': datetime.datetime(2015, 12, 1, 20, 00)}),
+                 mock.call('7085381b-45e0-4e5d-b24a-f965f5e6e5d7',
+                           {'time': datetime.datetime(2015, 12, 1, 22, 00)}),
+                 mock.call('452bf850-e223-4035-9d13-eb0b0197228f',
+                           {'time': datetime.datetime(2015, 12, 1, 21, 00)})
+                 ]
+        self.event_update.assert_has_calls(calls)
+        self.lease_update.assert_called_once_with(self.lease_id, lease_values)
+
+    def test_update_lease_under_limit(self):
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        def fake_event_get(sort_key, sort_dir, filters):
+            if filters['event_type'] == 'start_lease':
+                return {'id': u'2eeb784a-2d84-4a89-a201-9d42d61eecb1'}
+            elif filters['event_type'] == 'end_lease':
+                return {'id': u'7085381b-45e0-4e5d-b24a-f965f5e6e5d7'}
+            elif filters['event_type'] == 'before_end_lease':
+                delta = datetime.timedelta(hours=1)
+                return {'id': u'452bf850-e223-4035-9d13-eb0b0197228f',
+                        'time': self.lease['end_date'] - delta,
+                        'status': 'UNDONE'}
+
+        lease_values = {
+            'name': 'renamed',
+            'start_date': '2013-12-20 20:00',
+            'end_date': '2013-12-27 20:00'
+        }
+        reservation_get_all = (
+            self.patch(self.db_api, 'reservation_get_all_by_lease_id'))
+        reservation_get_all.return_value = [
+            {
+                'id': u'593e7028-c0d1-4d76-8642-2ffd890b324c',
+                'resource_type': 'virtual:instance',
+                'start_date': datetime.datetime(2013, 12, 20, 20, 00),
+                'end_date': datetime.datetime(2013, 12, 20, 21, 00)
+            }
+        ]
+        event_get = self.patch(db_api, 'event_get_first_sorted_by_filters')
+        event_get.side_effect = fake_event_get
+        target = datetime.datetime(2013, 12, 15)
+        with mock.patch.object(datetime,
+                               'datetime',
+                               mock.Mock(wraps=datetime.datetime)) as patched:
+            expected_context = self.trust_ctx.return_value
+            patched.utcnow.return_value = target
+            with mock.patch.object(expected_context.__enter__.return_value,
+                                   'project_id',
+                                   '555') as patched_context:
+                self.manager.update_lease(self.lease_id, lease_values)
+        self.fake_plugin.update_reservation.assert_called_with(
+            '593e7028-c0d1-4d76-8642-2ffd890b324c',
+            {
+                'id': '593e7028-c0d1-4d76-8642-2ffd890b324c',
+                'resource_type': 'virtual:instance',
+                'start_date': datetime.datetime(2013, 12, 20, 20, 00),
+                'end_date': datetime.datetime(2013, 12, 27, 20, 00)
+            }
+        )
+        calls = [mock.call('2eeb784a-2d84-4a89-a201-9d42d61eecb1',
+                           {'time': datetime.datetime(2013, 12, 20, 20, 00)}),
+                 mock.call('7085381b-45e0-4e5d-b24a-f965f5e6e5d7',
+                           {'time': datetime.datetime(2013, 12, 27, 20, 00)}),
+                 mock.call('452bf850-e223-4035-9d13-eb0b0197228f',
+                           {'time': datetime.datetime(2013, 12, 27, 19, 00)})
+                 ]
+        self.event_update.assert_has_calls(calls)
+        self.lease_update.assert_called_once_with(self.lease_id, lease_values)
+
+    def test_update_lease_longer_than_limit(self):
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        def fake_event_get(sort_key, sort_dir, filters):
+            if filters['event_type'] == 'start_lease':
+                return {'id': u'2eeb784a-2d84-4a89-a201-9d42d61eecb1'}
+            elif filters['event_type'] == 'end_lease':
+                return {'id': u'7085381b-45e0-4e5d-b24a-f965f5e6e5d7'}
+            elif filters['event_type'] == 'before_end_lease':
+                delta = datetime.timedelta(hours=1)
+                return {'id': u'452bf850-e223-4035-9d13-eb0b0197228f',
+                        'time': self.lease['end_date'] - delta,
+                        'status': 'UNDONE'}
+
+        # Update lease to one minute more than limit
+        lease_values = {
+            'name': 'name',
+            'start_date': '2026-11-13 13:13',
+            'end_date': '2026-11-20 13:14',
+            'trust_id': 'exxee111qwwwwe'}
+
+        reservation_get_all = (
+            self.patch(self.db_api, 'reservation_get_all_by_lease_id'))
+        reservation_get_all.return_value = [
+            {
+                'id': u'593e7028-c0d1-4d76-8642-2ffd890b324c',
+                'resource_type': 'virtual:instance',
+                'start_date': datetime.datetime(2013, 12, 20, 20, 00),
+                'end_date': datetime.datetime(2013, 12, 20, 21, 00)
+            }
+        ]
+        event_get = self.patch(db_api, 'event_get_first_sorted_by_filters')
+        event_get.side_effect = fake_event_get
+        target = datetime.datetime(2013, 12, 15)
+        with mock.patch.object(datetime,
+                               'datetime',
+                               mock.Mock(wraps=datetime.datetime)) as patched:
+            patched.utcnow.return_value = target
+            self.assertRaises(exceptions.NotAuthorized,
+                              self.manager.update_lease, self.lease_id, lease_values)
+
+    def test_wrong_lease_duration_config(self):
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:86400:1234'],
+                                   group='manager')
+
+        self.assertRaises(manager_ex.ConfigurationError,
+                          self.manager._get_project_max_lease_durations)
+
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:86400a'],
+                                   group='manager')
+
+        self.assertRaises(manager_ex.ConfigurationError,
+                          self.manager._get_project_max_lease_durations)
+
+    def test_create_lease_longer_than_project_specific_limit(self):
+        # One week default limit
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        # Two weeks limit for project '555'
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:1209600'],
+                                   group='manager')
+
+        self.manager.project_max_lease_durations = self.manager._get_project_max_lease_durations()
+
+        expected_context = self.trust_ctx.return_value
+        with mock.patch.object(expected_context.__enter__.return_value,
+                               'project_id',
+                               '555') as patched:
+
+            # Lease lasting two weeks
+            lease_values = {
+                'name': 'name',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-11-27 13:13',
+                'trust_id': 'exxee111qwwwwe'}
+
+            lease = self.manager.create_lease(lease_values)
+
+            self.lease_create.assert_called_once_with(lease_values)
+            self.assertEqual(lease, self.lease)
+            self.assertEqual(3, len(lease_values['events']))
+
+            # Lease lasting two weeks and one minute
+            lease_values = {
+                'name': 'name2',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-11-27 13:14',
+                'trust_id': 'exxee111qwwwwe'}
+
+            self.assertRaises(exceptions.NotAuthorized,
+                              self.manager.create_lease, lease_values)
+
+            # Testing smaller project-specific limit than default value of three weeks
+            self.cfg.CONF.set_override('default_max_lease_duration', 1814400,
+                                       group='manager')
+
+            # Lease lasting two weeks and one minute
+            lease_values = {
+                'name': 'name2',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-11-27 13:14',
+                'trust_id': 'exxee111qwwwwe'}
+
+            self.assertRaises(exceptions.NotAuthorized,
+                              self.manager.create_lease, lease_values)
+
+    def test_create_lease_with_unlimited_project(self):
+        # One week default limit
+        self.cfg.CONF.set_override('default_max_lease_duration', 604800,
+                                   group='manager')
+
+        # No limit for project '555'
+        self.cfg.CONF.set_override('project_max_lease_durations',
+                                   ['555:-1'],
+                                   group='manager')
+
+        self.manager.project_max_lease_durations = self.manager._get_project_max_lease_durations()
+
+        expected_context = self.trust_ctx.return_value
+        with mock.patch.object(expected_context.__enter__.return_value,
+                               'project_id',
+                               '555') as patched:
+
+            # Lease lasting one year
+            lease_values = {
+                'name': 'name',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2027-11-13 13:13',
+                'trust_id': 'exxee111qwwwwe'}
+
+            lease = self.manager.create_lease(lease_values)
+
+            self.lease_create.assert_called_once_with(lease_values)
+            self.assertEqual(lease, self.lease)
+            self.assertEqual(3, len(lease_values['events']))
+
     def test_update_lease_completed_lease_rename(self):
         lease_values = {'name': 'renamed'}
         target = datetime.datetime(2015, 1, 1)
@@ -701,7 +1104,11 @@ class ServiceTestCase(tests.TestCase):
                                'datetime',
                                mock.Mock(wraps=datetime.datetime)) as patched:
             patched.utcnow.return_value = target
-            self.manager.update_lease(self.lease_id, lease_values)
+            expected_context = self.trust_ctx.return_value
+            with mock.patch.object(expected_context.__enter__.return_value,
+                                   'project_id',
+                                   '555') as patched_context:
+                self.manager.update_lease(self.lease_id, lease_values)
         self.fake_plugin.update_reservation.assert_called_with(
             '593e7028-c0d1-4d76-8642-2ffd890b324c',
             {
