@@ -17,6 +17,7 @@ import datetime
 
 import eventlet
 from oslo_config import cfg
+import redis
 import six
 from stevedore import enabled
 
@@ -50,7 +51,14 @@ manager_opts = [
     cfg.ListOpt('project_max_lease_durations',
                 default=[],
                 help='Maximum lease durations overriding the default for specific projects. '
-                     'Syntax is a comma-separated list of <project_id>:<seconds> pairs.')
+                     'Syntax is a comma-separated list of <project_id>:<seconds> pairs.'),
+    cfg.BoolOpt('usage_enforcement', default=False,
+                help='Enforce usage limits stored in a database.'),
+    cfg.StrOpt('usage_db_host', default='127.0.0.1',
+               help='Hostname of the server hosting the usage DB. '
+               'It must be a hostname, FQDN, or IP address.'),
+    cfg.FloatOpt('usage_default_allocated', default=20000.0,
+               help='Default usage allocated if project missing from usage DB.')
 ]
 
 CONF = cfg.CONF
@@ -189,17 +197,17 @@ class ManagerService(service_utils.RPCServer):
         end_date = lease_values['end_date']
         project_id = lease_values['project_id']
 
+        lease_duration = end_date - start_date
+        lease_duration_seconds = lease_duration.days * 86400 + lease_duration.seconds
         if project_id in self.project_max_lease_durations:
             project_max_lease_duration = self.project_max_lease_durations[project_id]
-            lease_duration = end_date - start_date
             if project_max_lease_duration != -1:
-                if (lease_duration.days * 86400 + lease_duration.seconds) > project_max_lease_duration:
+                if (lease_duration_seconds) > project_max_lease_duration:
                     raise common_ex.NotAuthorized(
                         'Lease is longer than maximum allowed of %d seconds for project %s' %
                         (project_max_lease_duration, project_id))
         elif CONF.manager.default_max_lease_duration != -1:
-            lease_duration = end_date - start_date
-            if (lease_duration.days * 86400 + lease_duration.seconds) > CONF.manager.default_max_lease_duration:
+            if (lease_duration_seconds) > CONF.manager.default_max_lease_duration:
                 raise common_ex.NotAuthorized(
                     'Lease is longer than maximum allowed of %d seconds' % CONF.manager.default_max_lease_duration)
 
@@ -247,8 +255,25 @@ class ManagerService(service_utils.RPCServer):
             lease_values['project_id'] = ctx.project_id
             lease_values['start_date'] = start_date
             lease_values['end_date'] = end_date
+            project_id = lease_values['project_id']
 
             self._check_lease_duration_limit(lease_values)
+
+            if CONF.manager.usage_enforcement:
+                if not CONF.manager.usage_db_host:
+                    raise common_ex.ConfigurationError('usage_db_host must be set')
+                try:
+                    r = redis.StrictRedis(host=CONF.manager.usage_db_host, port=6379, db=0)
+                    allocated = r.hget('allocated', project_id)
+                    if allocated is None:
+                        LOG.info('Setting project %s allocated to %f', CONF.manager.usage_default_allocated)
+                        r.hset('allocated', project_id, CONF.manager.usage_default_allocated)
+                    balance = r.hget('balance', project_id)
+                    if balance is None:
+                        LOG.info('Setting project %s balance to %f', CONF.manager.usage_default_allocated)
+                        r.hset('balance', project_id, CONF.manager.usage_default_allocated)
+                except redis.exceptions.ConnectionError:
+                    LOG.exception('Cannot connect to redis server %s', CONF.manager.usage_db_host)
 
             if not lease_values.get('events'):
                 lease_values['events'] = []
@@ -304,7 +329,9 @@ class ManagerService(service_utils.RPCServer):
                         resource_type = reservation['resource_type']
                         if resource_type in self.plugins:
                             self.plugins[resource_type].create_reservation(
-                                reservation)
+                                reservation, usage_enforcement=CONF.manager.usage_enforcement,
+                                usage_db_host=CONF.manager.usage_db_host,
+                                project_id=project_id)
                         else:
                             raise exceptions.UnsupportedResourceType(
                                 resource_type)
@@ -378,7 +405,11 @@ class ManagerService(service_utils.RPCServer):
                 'End date must be later than current and start date')
 
         with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
-            values['project_id'] = ctx.project_id
+            # To make tests happy...
+            try:
+                values['project_id'] = lease['project_id']
+            except KeyError:
+                values['project_id'] = ctx.project_id
 
             if before_end_date:
                 try:
@@ -399,7 +430,10 @@ class ManagerService(service_utils.RPCServer):
                 resource_type = reservation['resource_type']
                 self.plugins[resource_type].update_reservation(
                     reservation['id'],
-                    reservation)
+                    reservation,
+                    usage_enforcement=CONF.manager.usage_enforcement,
+                    usage_db_host=CONF.manager.usage_db_host,
+                    project_id=values['project_id'])
 
         event = db_api.event_get_first_sorted_by_filters(
             'lease_id',
