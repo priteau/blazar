@@ -730,6 +730,18 @@
 # <project_id>:<seconds> pairs.  (list value)
 #project_max_lease_durations=
 
+# Enforce usage limits stored in a database
+#usage_enforcement=False
+
+# Hostname of the server hosting the usage DB.
+# It must be a hostname, FQDN, or IP address.
+# (string value)
+#usage_db_host=127.0.0.1
+
+# Default usage allocation if project missing from usage DB.
+# (float value)
+#usage_default_allocated=20000.0
+
 # Number of hours prior to lease end in which a notification
 # of lease close to expire will be sent. If this is set to 0,
 # then this notification will not be sent. (integer value)

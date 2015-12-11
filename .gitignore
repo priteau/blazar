@@ -36,3 +36,6 @@ AUTHORS
 ChangeLog
 
 .testrepository
+
+# Redis snapshot
+dump.rdb
