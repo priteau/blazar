@@ -18,9 +18,11 @@ import datetime
 import mock
 from novaclient import client as nova_client
 from oslo_config import cfg
+import redis
 import testtools
 
 from blazar import context
+from blazar import exceptions as common_ex
 from blazar.db import api as db_api
 from blazar.db import exceptions as db_exceptions
 from blazar.db import utils as db_utils
@@ -159,6 +161,14 @@ class PhysicalHostPluginTestCase(tests.TestCase):
         self.trust_create = self.patch(self.trusts, 'create_trust')
 
         self.ServerManager = nova.ServerManager
+
+    def _setup_redis(self, host):
+        try:
+            r = redis.StrictRedis(host=host, port=6379, db=0)
+            r.flushdb()
+        except redis.exceptions.ConnectionError:
+            self.skipTest("cannot connect to redis host %s" % host)
+        return r
 
     def test_get_host(self):
         host = self.fake_phys_plugin.get_computehost(self.fake_host_id)
@@ -474,6 +484,135 @@ class PhysicalHostPluginTestCase(tests.TestCase):
             u'441c1476-9f8f-4700-9f30-cd9b6fef3509',
             values)
 
+    def test_create_reservation_with_usage_enforcement(self):
+        project_id = '555'
+        usage_db_host = 'localhost'
+        r = self._setup_redis(usage_db_host)
+        r.hset('allocated', project_id, 20000.0)
+        r.hset('balance', project_id, 3.0)
+        r.hset('used', project_id, 19997.0)
+        r.hset('encumbered', project_id, 1.0)
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(1.0, float(r.hget('encumbered', project_id)))
+
+        values = {
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'min': u'2',
+            'max': u'2',
+            'hypervisor_properties': '["=", "$memory_mb", "256"]',
+            'resource_properties': '',
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00),
+            'resource_type': plugin.RESOURCE_TYPE,
+        }
+        reservation_values = {
+            'id': u'441c1476-9f8f-4700-9f30-cd9b6fef3509',
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'resource_id': '1',
+            'resource_type': plugin.RESOURCE_TYPE,
+            'status': 'pending',
+        }
+        uuid4 = self.patch(uuid, 'uuid4')
+        uuid4.return_value = uuid.UUID('441c1476-9f8f-4700-9f30-cd9b6fef3509')
+        self.rp_create.return_value = mock.MagicMock(id='1')
+        reservation_create = self.patch(self.db_api, 'reservation_create')
+        reservation_create.return_value = {
+            'id': u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+        }
+        host_reservation_create = self.patch(self.db_api,
+                                             'host_reservation_create')
+        matching_hosts = self.patch(self.fake_phys_plugin, '_matching_hosts')
+        matching_hosts.return_value = ['host1', 'host2']
+        host_allocation_create = self.patch(
+            self.db_api,
+            'host_allocation_create')
+        self.fake_phys_plugin.create_reservation(values, usage_enforcement=True,
+                                                 usage_db_host=usage_db_host,
+                                                 project_id=project_id)
+        reservation_create.assert_called_once_with(reservation_values)
+        host_values = {
+            'reservation_id': u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+            'resource_properties': '',
+            'hypervisor_properties': '["=", "$memory_mb", "256"]',
+            'count_range': '2-2',
+            'status': 'pending',
+        }
+        host_reservation_create.assert_called_once_with(host_values)
+        calls = [
+            mock.call(
+                {'compute_host_id': 'host1',
+                 'reservation_id': u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+                 }),
+            mock.call(
+                {'compute_host_id': 'host2',
+                 'reservation_id': u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+                 }),
+        ]
+        host_allocation_create.assert_has_calls(calls)
+
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        # 2.0 additional encumbered SUs because we are reserving two hosts for one hour
+        self.assertEqual(3.0, float(r.hget('encumbered', project_id)))
+
+    def test_create_reservation_above_enforcement_limit(self):
+        project_id = '555'
+        usage_db_host = 'localhost'
+        r = self._setup_redis(usage_db_host)
+        r.hset('allocated', project_id, 20000.0)
+        r.hset('balance', project_id, 3.0)
+        r.hset('used', project_id, 19997.0)
+        r.hset('encumbered', project_id, 1.0)
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(1.0, float(r.hget('encumbered', project_id)))
+
+        values = {
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'min': u'2',
+            'max': u'2',
+            'hypervisor_properties': '["=", "$memory_mb", "256"]',
+            'resource_properties': '',
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 01),
+            'resource_type': plugin.RESOURCE_TYPE,
+        }
+        reservation_values = {
+            'id': u'441c1476-9f8f-4700-9f30-cd9b6fef3509',
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'resource_id': '1',
+            'resource_type': plugin.RESOURCE_TYPE,
+            'status': 'pending',
+        }
+        uuid4 = self.patch(uuid, 'uuid4')
+        uuid4.return_value = uuid.UUID('441c1476-9f8f-4700-9f30-cd9b6fef3509')
+        self.rp_create.return_value = mock.MagicMock(id='1')
+        reservation_create = self.patch(self.db_api, 'reservation_create')
+        reservation_create.return_value = {
+            'id': u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+        }
+        host_reservation_create = self.patch(self.db_api,
+                                             'host_reservation_create')
+        matching_hosts = self.patch(self.fake_phys_plugin, '_matching_hosts')
+        matching_hosts.return_value = ['host1', 'host2']
+        host_allocation_create = self.patch(
+            self.db_api,
+            'host_allocation_create')
+        self.assertRaises(common_ex.NotAuthorized,
+                          self.fake_phys_plugin.create_reservation,
+                          values, usage_enforcement=True,
+                          usage_db_host=usage_db_host,
+                          project_id=project_id)
+
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(1.0, float(r.hget('encumbered', project_id)))
+
     def test_update_reservation_shorten(self):
         values = {
             'start_date': datetime.datetime(2013, 12, 19, 20, 30),
@@ -503,6 +642,53 @@ class PhysicalHostPluginTestCase(tests.TestCase):
             '706eb3bc-07ed-4383-be93-b32845ece672',
             values)
         host_allocation_get_all.assert_not_called()
+
+    def test_update_reservation_shorten_with_usage_enforcement(self):
+        project_id = '555'
+        usage_db_host = 'localhost'
+        r = self._setup_redis(usage_db_host)
+        r.hset('allocated', project_id, '20000.0')
+        r.hset('balance', project_id, 19999.0)
+        r.hset('used', project_id, '1.0')
+        r.hset('encumbered', project_id, '1.0')
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(19999.0, float(r.hget('balance', project_id)))
+        self.assertEqual(1.0, float(r.hget('used', project_id)))
+        self.assertEqual(1.0, float(r.hget('encumbered', project_id)))
+
+        values = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 30),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        host_allocation_get_all = self.patch(
+            self.db_api,
+            'host_allocation_get_all_by_values')
+        host_allocation_get_all.return_value = ['host1']
+        get_computehosts = self.patch(self.rp.ReservationPool,
+                                      'get_computehosts')
+        get_computehosts.return_value = ['host1']
+        self.fake_phys_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values,
+            usage_enforcement=True,
+            usage_db_host=usage_db_host,
+            project_id=project_id)
+        host_allocation_get_all.assert_called_with(reservation_id='706eb3bc-07ed-4383-be93-b32845ece672')
+
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(19999.0, float(r.hget('balance', project_id)))
+        self.assertEqual(1.0, float(r.hget('used', project_id)))
+        self.assertEqual(0.5, float(r.hget('encumbered', project_id)))
 
     def test_update_reservation_extend(self):
         values = {
@@ -538,6 +724,127 @@ class PhysicalHostPluginTestCase(tests.TestCase):
             '706eb3bc-07ed-4383-be93-b32845ece672',
             values)
         host_reservation_get.assert_not_called()
+
+    def test_update_reservation_extend_with_usage_enforcement(self):
+        project_id = '555'
+        usage_db_host = 'localhost'
+        r = self._setup_redis(usage_db_host)
+        r.hset('allocated', project_id, 20000.0)
+        r.hset('balance', project_id, 3.0)
+        r.hset('used', project_id, 19997.0)
+        r.hset('encumbered', project_id, 2.5)
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(2.5, float(r.hget('encumbered', project_id)))
+
+        values = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 30)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        host_reservation_get_by_reservation_id = self.patch(
+            self.db_api,
+            'host_reservation_get_by_reservation_id')
+        host_allocation_get_all = self.patch(
+            self.db_api,
+            'host_allocation_get_all_by_values')
+        host_allocation_get_all.return_value = [
+            {
+                'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
+                'compute_host_id': 'host1'
+            }
+        ]
+        get_full_periods = self.patch(self.db_utils, 'get_full_periods')
+        get_full_periods.return_value = [
+            (datetime.datetime(2013, 12, 19, 20, 00),
+             datetime.datetime(2013, 12, 19, 21, 00))
+        ]
+        get_computehosts = self.patch(self.rp.ReservationPool,
+                                      'get_computehosts')
+        get_computehosts.return_value = ['host1']
+        self.fake_phys_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values,
+            usage_enforcement=True,
+            usage_db_host=usage_db_host,
+            project_id=project_id)
+        host_reservation_get_by_reservation_id.assert_not_called()
+
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(3.0, float(r.hget('encumbered', project_id)))
+
+    def test_update_reservation_above_enforcement_limit(self):
+        project_id = '555'
+        usage_db_host = 'localhost'
+        r = self._setup_redis(usage_db_host)
+        r.hset('allocated', project_id, 20000.0)
+        r.hset('balance', project_id, 3.0)
+        r.hset('used', project_id, 19997.0)
+        r.hset('encumbered', project_id, 2.5)
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(2.5, float(r.hget('encumbered', project_id)))
+
+        values = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 31)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        host_reservation_get_by_reservation_id = self.patch(
+            self.db_api,
+            'host_reservation_get_by_reservation_id')
+        host_allocation_get_all = self.patch(
+            self.db_api,
+            'host_allocation_get_all_by_values')
+        host_allocation_get_all.return_value = [
+            {
+                'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
+                'compute_host_id': 'host1'
+            }
+        ]
+        get_full_periods = self.patch(self.db_utils, 'get_full_periods')
+        get_full_periods.return_value = [
+            (datetime.datetime(2013, 12, 19, 20, 00),
+             datetime.datetime(2013, 12, 19, 21, 00))
+        ]
+        get_computehosts = self.patch(self.rp.ReservationPool,
+                                      'get_computehosts')
+        get_computehosts.return_value = ['host1']
+        self.assertRaises(common_ex.NotAuthorized,
+                          self.fake_phys_plugin.update_reservation,
+                          '706eb3bc-07ed-4383-be93-b32845ece672',
+                          values,
+                          usage_enforcement=True,
+                          usage_db_host=usage_db_host,
+                          project_id=project_id)
+        host_reservation_get_by_reservation_id.assert_not_called()
+
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(3.0, float(r.hget('balance', project_id)))
+        self.assertEqual(19997.0, float(r.hget('used', project_id)))
+        self.assertEqual(2.5, float(r.hget('encumbered', project_id)))
 
     def test_update_reservation_move_failure(self):
         values = {
@@ -824,6 +1131,87 @@ class PhysicalHostPluginTestCase(tests.TestCase):
             u'bfa9aa0b-8042-43eb-a4e6-4555838bf64f')
         delete_server.assert_not_called()
         delete_pool.assert_called_with(1)
+
+    def test_on_end_with_usage_enforcement(self):
+        project_id = '555'
+        usage_db_host = 'localhost'
+        r = self._setup_redis(usage_db_host)
+        r.hset('allocated', project_id, 20000.0)
+        r.hset('balance', project_id, 19999.0)
+        r.hset('used', project_id, 1.0)
+        r.hset('encumbered', project_id, 1.0)
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(19999.0, float(r.hget('balance', project_id)))
+        self.assertEqual(1.0, float(r.hget('used', project_id)))
+        self.assertEqual(1.0, float(r.hget('encumbered', project_id)))
+
+        reservation_get_all_by_values = self.patch(
+            self.db_api,
+            'reservation_get_all_by_values')
+        reservation_get_all_by_values.return_value = [
+            {
+                'id': u'593e7028-c0d1-4d76-8642-2ffd890b324c',
+                'resource_id': u'04de74e8-193a-49d2-9ab8-cba7b49e45e8',
+                'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            },
+        ]
+        reservation_update = self.patch(self.db_api, 'reservation_update')
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'min': u'1',
+            'max': u'1',
+            'hypervisor_properties': '["=", "$memory_mb", "256"]',
+            'resource_properties': '',
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00),
+            'resource_type': plugin.RESOURCE_TYPE,
+        }
+        host_reservation_get_by_reservation_id = self.patch(
+            self.db_api,
+            'host_reservation_get_by_reservation_id')
+        host_reservation_get_by_reservation_id.return_value = {
+            'id': u'35fc4e6a-ba57-4a36-be30-6012377a0387',
+        }
+        host_reservation_update = self.patch(
+            self.db_api,
+            'host_reservation_update')
+        host_allocation_get_all_by_values = self.patch(
+            self.db_api,
+            'host_allocation_get_all_by_values')
+        host_allocation_get_all_by_values.return_value = [
+            {'id': u'bfa9aa0b-8042-43eb-a4e6-4555838bf64f',
+             'compute_host_id': u'cdae2a65-236f-475a-977d-f6ad82f828b7',
+             },
+        ]
+        host_allocation_destroy = self.patch(
+            self.db_api,
+            'host_allocation_destroy')
+        delete = self.patch(self.rp.ReservationPool, 'delete')
+        self.patch(self.fake_phys_plugin, '_get_hypervisor_from_name_or_id')
+        get_hypervisors = self.patch(self.nova.hypervisors, 'get')
+        get_hypervisors.return_value = mock.MagicMock(running_vms=0)
+        target = datetime.datetime(2013, 12, 19, 20, 30)
+        with mock.patch.object(datetime,
+                               'datetime',
+                               mock.Mock(wraps=datetime.datetime)) as patched:
+            patched.utcnow.return_value = target
+            self.fake_phys_plugin.on_end(u'04de74e8-193a-49d2-9ab8-cba7b49e45e8',
+                                         usage_enforcement=True,
+                                         usage_db_host=usage_db_host,
+                                         project_id=project_id)
+        reservation_update.assert_called_with(
+            u'593e7028-c0d1-4d76-8642-2ffd890b324c', {'status': 'completed'})
+        host_reservation_update.assert_called_with(
+            u'35fc4e6a-ba57-4a36-be30-6012377a0387', {'status': 'completed'})
+        host_allocation_destroy.assert_called_with(
+            u'bfa9aa0b-8042-43eb-a4e6-4555838bf64f')
+        delete.assert_called_with(u'04de74e8-193a-49d2-9ab8-cba7b49e45e8')
+
+        self.assertEqual(20000.0, float(r.hget('allocated', project_id)))
+        self.assertEqual(19999.0, float(r.hget('balance', project_id)))
+        self.assertEqual(1.0, float(r.hget('used', project_id)))
+        self.assertEqual(0.5, float(r.hget('encumbered', project_id)))
 
     def test_matching_hosts_not_allocated_hosts(self):
         def host_allocation_get_all_by_values(**kwargs):

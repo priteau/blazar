@@ -18,6 +18,7 @@ import datetime
 import eventlet
 import mock
 from oslo_config import cfg
+import redis
 from stevedore import enabled
 import testtools
 
@@ -783,7 +784,10 @@ class ServiceTestCase(tests.TestCase):
                 'resource_type': 'virtual:instance',
                 'start_date': datetime.datetime(2015, 12, 1, 20, 00),
                 'end_date': datetime.datetime(2015, 12, 1, 22, 00)
-            }
+            },
+            usage_enforcement=False,
+            usage_db_host=self.cfg.CONF.manager.usage_db_host,
+            project_id='555'
         )
         calls = [mock.call('2eeb784a-2d84-4a89-a201-9d42d61eecb1',
                            {'time': datetime.datetime(2015, 12, 1, 20, 00)}),
@@ -844,7 +848,10 @@ class ServiceTestCase(tests.TestCase):
                 'resource_type': 'virtual:instance',
                 'start_date': datetime.datetime(2013, 12, 20, 20, 00),
                 'end_date': datetime.datetime(2013, 12, 27, 20, 00)
-            }
+            },
+            usage_enforcement=False,
+            usage_db_host=self.cfg.CONF.manager.usage_db_host,
+            project_id='555'
         )
         calls = [mock.call('2eeb784a-2d84-4a89-a201-9d42d61eecb1',
                            {'time': datetime.datetime(2013, 12, 20, 20, 00)}),
@@ -997,6 +1004,50 @@ class ServiceTestCase(tests.TestCase):
             self.assertEqual(lease, self.lease)
             self.assertEqual(3, len(lease_values['events']))
 
+    def test_usage_enforcement(self):
+        project_id = '555'
+        host = 'localhost'
+        try:
+            r = redis.StrictRedis(host=host, port=6379, db=0)
+            r.flushdb()
+        except:
+            raise self.skipTest("cannot connect to redis host %s" % host)
+
+        self.ext_manager.return_value.extensions = [
+            FakeExtension("physical.host.plugin", host_plugin.PhysicalHostPlugin)]
+        self.cfg.CONF.set_override('plugins', ['physical.host.plugin'],
+                                   group='manager')
+        self.manager.plugins = self.manager._get_plugins()
+        self.manager.plugins = {'physical:host': self.host_plugin.PhysicalHostPlugin}
+        self.cfg.CONF.set_override('usage_enforcement', True,
+                                   group='manager')
+        self.cfg.CONF.set_override('usage_db_host', host,
+                                   group='manager')
+
+        expected_context = self.trust_ctx.return_value
+        with mock.patch.object(expected_context.__enter__.return_value,
+                               'project_id',
+                               project_id) as patched:
+            lease_values = {
+                'name': 'name',
+                'start_date': '2026-11-13 13:13',
+                'end_date': '2026-12-13 13:13',
+                'reservations': [{'id': '111',
+                                  'resource_id': '111',
+                                  'resource_type': 'physical:host',
+                                  'min': '1',
+                                  'max': '1',
+                                  'status': 'FAKE PROGRESS'}],
+                'trust_id': 'exxee111qwwwwe'}
+
+            lease = self.manager.create_lease(lease_values)
+
+            self.lease_create.assert_called_once_with(lease_values)
+            self.assertEqual(lease, self.lease)
+            self.assertEqual(3, len(lease_values['events']))
+
+            self.assertEqual('20000.0', r.hget('allocated', project_id))
+
     def test_update_lease_completed_lease_rename(self):
         lease_values = {'name': 'renamed'}
         target = datetime.datetime(2015, 1, 1)
@@ -1050,7 +1101,10 @@ class ServiceTestCase(tests.TestCase):
                 'resource_type': 'virtual:instance',
                 'start_date': datetime.datetime(2015, 12, 1, 20, 00),
                 'end_date': datetime.datetime(2015, 12, 1, 22, 00)
-            }
+            },
+            usage_enforcement=False,
+            usage_db_host=self.cfg.CONF.manager.usage_db_host,
+            project_id='555'
         )
         calls = [mock.call('2eeb784a-2d84-4a89-a201-9d42d61eecb1',
                            {'time': datetime.datetime(2015, 12, 1, 20, 00)}),
@@ -1100,7 +1154,10 @@ class ServiceTestCase(tests.TestCase):
                 'resource_type': 'virtual:instance',
                 'start_date': datetime.datetime(2013, 12, 20, 13, 00),
                 'end_date': datetime.datetime(2013, 12, 20, 16, 00)
-            }
+            },
+            usage_enforcement=False,
+            usage_db_host=self.cfg.CONF.manager.usage_db_host,
+            project_id='555'
         )
         calls = [mock.call('2eeb784a-2d84-4a89-a201-9d42d61eecb1',
                            {'time': datetime.datetime(2013, 12, 20, 13, 00)}),
@@ -1155,7 +1212,10 @@ class ServiceTestCase(tests.TestCase):
                 'resource_type': 'virtual:instance',
                 'start_date': datetime.datetime(2013, 12, 20, 13, 00),
                 'end_date': datetime.datetime(2013, 12, 20, 16, 00)
-            }
+            },
+            usage_enforcement=False,
+            usage_db_host=self.cfg.CONF.manager.usage_db_host,
+            project_id='555'
         )
         expected_context = self.trust_ctx.return_value
         calls = [mock.call(expected_context.__enter__.return_value,
@@ -1221,7 +1281,10 @@ class ServiceTestCase(tests.TestCase):
                 'resource_type': 'virtual:instance',
                 'start_date': datetime.datetime(2013, 12, 20, 13, 00),
                 'end_date': datetime.datetime(2013, 12, 20, 16, 00)
-            }
+            },
+            usage_enforcement=False,
+            usage_db_host=self.cfg.CONF.manager.usage_db_host,
+            project_id='555'
         )
         expected_context = self.trust_ctx.return_value
         calls = [mock.call(expected_context.__enter__.return_value,

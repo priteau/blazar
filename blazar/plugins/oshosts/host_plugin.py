@@ -18,7 +18,9 @@ import datetime
 
 from oslo_config import cfg
 from oslo_utils import strutils
+import redis
 
+from blazar import exceptions as common_ex
 from blazar.db import api as db_api
 from blazar.db import exceptions as db_ex
 from blazar.db import utils as db_utils
@@ -52,6 +54,7 @@ plugin_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(plugin_opts, group=plugin.RESOURCE_TYPE)
+LOG = logging.getLogger(__name__)
 
 
 before_end_options = ['', 'snapshot', 'default']
@@ -65,6 +68,28 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
     freepool_name = CONF.nova.aggregate_freepool_name
     pool = None
 
+    def _setup_redis(self, usage_db_host):
+        if not usage_db_host:
+            raise common_ex.ConfigurationError("usage_db_host must be set")
+        return redis.StrictRedis(host=CONF.manager.usage_db_host, port=6379, db=0)
+
+    def _init_usage_values(self, r, project_id):
+        try:
+            balance = r.hget('balance', project_id)
+            if balance is None:
+                r.hset('balance', project_id, CONF.manager.usage_default_allocated)
+
+            used = r.hget('used', project_id)
+            if used is None:
+                used = 0.0
+                r.hset('used', project_id, 0.0)
+
+            encumbered = r.hget('encumbered', project_id)
+            if encumbered is None:
+                r.hset('encumbered', project_id, 0.0)
+        except redis.exceptions.ConnectionError:
+            LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+
     def __init__(self):
         super(PhysicalHostPlugin, self).__init__(
             username=CONF.os_admin_username,
@@ -73,9 +98,27 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             project_name=CONF.os_admin_project_name,
             project_domain_name=CONF.os_admin_user_domain_name)
 
-    def reserve_resource(self, reservation_id, values):
+    def reserve_resource(self, reservation_id, values, usage_enforcement=False, usage_db_host=None, project_id=None):
         """Create reservation."""
         self._check_params(values)
+
+        if usage_enforcement:
+            r = self._setup_redis(usage_db_host)
+            self._init_usage_values(r, project_id)
+            try:
+                balance = float(r.hget('balance', project_id))
+                encumbered = float(r.hget('encumbered', project_id))
+                start_date = values['start_date']
+                end_date = values['end_date']
+                duration = end_date - start_date
+                hours = (duration.days * 86400 + duration.seconds) / 3600.0
+                requested = hours * float(values['max'])
+                left = balance - encumbered
+                if left - requested < 0:
+                    raise common_ex.NotAuthorized(
+                        'Reservation would spend %f SUs, only %f left' % (requested, left))
+            except redis.exceptions.ConnectionError:
+                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
         host_ids = self._matching_hosts(
             values['hypervisor_properties'],
@@ -106,10 +149,46 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                                           'reservation_id': reservation_id})
         return host_reservation['id']
 
-    def update_reservation(self, reservation_id, values):
+        if usage_enforcement:
+            try:
+                start_date = values['start_date']
+                end_date = values['end_date']
+                duration = end_date - start_date
+                hours = (duration.days * 86400 + duration.seconds) / 3600.0
+                encumbered = hours * len(host_ids)
+                LOG.info("Increasing encumbered for project %s by %s", project_id, encumbered)
+                r.hincrbyfloat('encumbered', project_id, str(encumbered))
+                LOG.info("Usage encumbered for project %s now %s", project_id, r.hget('encumbered', project_id))
+            except redis.exceptions.ConnectionError:
+                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+
+    def update_reservation(self, reservation_id, values, usage_enforcement=False, usage_db_host=None, project_id=None):
         """Update reservation."""
+        if usage_enforcement:
+            r = self._setup_redis(usage_db_host)
+            self._init_usage_values(r, project_id)
+
         reservation = db_api.reservation_get(reservation_id)
         lease = db_api.lease_get(reservation['lease_id'])
+        # Check if we have enough available SUs for update
+        if usage_enforcement:
+            try:
+                hosts = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
+                balance = float(r.hget('balance', project_id))
+                encumbered = float(r.hget('encumbered', project_id))
+
+                old_duration = lease['end_date'] - lease['start_date']
+                new_duration = values['end_date'] - values['start_date']
+                change = new_duration - old_duration
+                hours = (change.days * 86400 + change.seconds) / 3600.0
+                requested = hours * len(hosts)
+                left = balance - encumbered
+                if left - requested < 0:
+                    raise common_ex.NotAuthorized(
+                        'Update reservation would spend %f more SUs, only %f left' % (requested, left))
+            except redis.exceptions.ConnectionError:
+                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+
         if (values['start_date'] < lease['start_date'] or
                 values['end_date'] > lease['end_date']):
             allocations = []
@@ -150,6 +229,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                     values['end_date'])
                 if not host_ids:
                     raise manager_ex.NotEnoughHostsAvailable()
+
                 if hosts_in_pool:
                     old_hosts = [db_api.host_get(allocation['compute_host_id'])
                                  for allocation in allocations]
@@ -167,6 +247,20 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                         host = db_api.host_get(host_id)
                         pool.add_computehost(host_reservation['aggregate_id'],
                                              host['service_name'])
+
+        if usage_enforcement:
+            try:
+                hosts = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
+                old_duration = lease['end_date'] - lease['start_date']
+                new_duration = values['end_date'] - values['start_date']
+                change = new_duration - old_duration
+                hours = (change.days * 86400 + change.seconds) / 3600.0
+                change_encumbered = hours * len(hosts)
+                LOG.info("Increasing encumbered for project %s by %s", project_id, change_encumbered)
+                r.hincrbyfloat('encumbered', project_id, str(change_encumbered))
+                LOG.info("Usage encumbered for project %s now %s", project_id, r.hget('encumbered', project_id))
+            except redis.exceptions.ConnectionError:
+                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
     def on_start(self, resource_id):
         """Add the hosts in the pool."""
@@ -193,8 +287,12 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                         search_opts={"host": host, "all_tenants": 1}):
                         client.servers.create_image(server=server)
 
-    def on_end(self, resource_id):
+    def on_end(self, resource_id, usage_enforcement=False, usage_db_host=None, project_id=None):
         """Remove the hosts from the pool."""
+        if usage_enforcement:
+            r = self._setup_redis(usage_db_host)
+            self._init_usage_values(r, project_id)
+
         host_reservation = db_api.host_reservation_get(resource_id)
         db_api.host_reservation_update(host_reservation['id'],
                                        {'status': 'completed'})
@@ -211,6 +309,24 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             pool.delete(host_reservation['aggregate_id'])
         except manager_ex.AggregateNotFound:
             pass
+
+        if usage_enforcement:
+            try:
+                status = reservation['status']
+                if status in ['pending', 'active']:
+                    old_duration = lease['end_date'] - lease['start_date']
+                    if status == 'pending':
+                        new_duration = datetime.timedelta(seconds=0)
+                    elif reservation['status'] == 'active':
+                        new_duration = datetime.datetime.utcnow() - lease['start_date']
+                    change = new_duration - old_duration
+                    hours = (change.days * 86400 + change.seconds) / 3600.0
+                    change_encumbered = hours * len(allocations)
+                    LOG.info("Increasing encumbered for project %s by %s", project_id, change_encumbered)
+                    r.hincrbyfloat('encumbered', project_id, str(change_encumbered))
+                    LOG.info("Usage encumbered for project %s now %s", project_id, r.hget('encumbered', project_id))
+            except redis.exceptions.ConnectionError:
+                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
     def _get_extra_capabilities(self, host_id):
         extra_capabilities = {}
