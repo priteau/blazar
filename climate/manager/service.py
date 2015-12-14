@@ -483,8 +483,12 @@ class ManagerService(service_utils.RPCServer):
         with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
             for reservation in lease['reservations']:
                 plugin = self.plugins[reservation['resource_type']]
+                project_id=lease['project_id']
                 try:
-                    plugin.on_end(reservation['resource_id'])
+                    plugin.on_end(reservation['resource_id'],
+                                  usage_enforcement=CONF.manager.usage_enforcement,
+                                  usage_db_host=CONF.manager.usage_db_host,
+                                  project_id=project_id)
                 except (db_ex.ClimateDBException, RuntimeError):
                     error_msg = "Failed to delete a reservation for a lease."
                     lease_state = states.LeaseState(id=lease_id,
