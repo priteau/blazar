@@ -320,14 +320,19 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
             if usage_enforcement:
                 try:
-                    old_duration = lease['end_date'] - lease['start_date']
-                    new_duration = datetime.datetime.utcnow() - lease['start_date']
-                    change = new_duration - old_duration
-                    hours = (change.days * 86400 + change.seconds) / 3600.0
-                    change_encumbered = hours * len(allocations)
-                    LOG.info("Increasing encumbered for project %s by %s", project_id, change_encumbered)
-                    r.hincrbyfloat('encumbered', project_id, str(change_encumbered))
-                    LOG.info("Usage encumbered for project %s now %s", project_id, r.hget('encumbered', project_id))
+                    status = reservation['status']
+                    if status in ['pending', 'active']:
+                        old_duration = lease['end_date'] - lease['start_date']
+                        if status == 'pending':
+                            new_duration = datetime.timedelta(seconds=0)
+                        elif reservation['status'] == 'active':
+                            new_duration = datetime.datetime.utcnow() - lease['start_date']
+                        change = new_duration - old_duration
+                        hours = (change.days * 86400 + change.seconds) / 3600.0
+                        change_encumbered = hours * len(allocations)
+                        LOG.info("Increasing encumbered for project %s by %s", project_id, change_encumbered)
+                        r.hincrbyfloat('encumbered', project_id, str(change_encumbered))
+                        LOG.info("Usage encumbered for project %s now %s", project_id, r.hget('encumbered', project_id))
                 except redis.exceptions.ConnectionError:
                     LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
