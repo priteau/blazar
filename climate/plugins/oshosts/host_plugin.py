@@ -136,7 +136,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 left = balance - encumbered
                 if left - requested < 0:
                     raise common_ex.NotAuthorized(
-                        'Reservation would spend %f SUs, only %f left' % (requested, left))
+                        'Reservation for project %s would spend %f SUs, only %f left' % (project_id, requested, left))
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
