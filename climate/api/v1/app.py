@@ -14,6 +14,9 @@
 # limitations under the License.
 
 import eventlet
+eventlet.monkey_patch(
+    os=True, select=True, socket=True, thread=True, time=True)
+
 import flask
 from keystoneclient.middleware import auth_token
 from oslo.config import cfg
@@ -38,10 +41,6 @@ CONF.import_opt('os_admin_password', 'climate.config')
 CONF.import_opt('os_admin_project_name', 'climate.config')
 CONF.import_opt('os_auth_version', 'climate.config')
 CONF.import_opt('log_exchange', 'climate.config')
-
-
-eventlet.monkey_patch(
-    os=True, select=True, socket=True, thread=True, time=True)
 
 
 def make_json_error(ex):
