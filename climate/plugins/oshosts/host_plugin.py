@@ -427,8 +427,6 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 return None
 
     def update_computehost(self, host_id, values):
-        # NOTE (sbauza): Only update existing extra capabilites, don't create
-        #  other ones
         if values:
             cant_update_extra_capability = []
             for value in values:
@@ -447,6 +445,17 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                     except RuntimeError:
                         cant_update_extra_capability.append(
                             raw_capability['capability_name'])
+                else:
+                    new_values = {
+                        'computehost_id': host_id,
+                        'capability_name': value,
+                        'capability_value': values[value],
+                    }
+                    try:
+                        db_api.host_extra_capability_create(new_values)
+                    except db_ex.ClimateDBException:
+                        cant_update_extra_capability.append(
+                            new_values['capability_name'])
             if cant_update_extra_capability:
                 raise manager_ex.CantAddExtraCapability(
                     host=host_id,
