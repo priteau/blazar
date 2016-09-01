@@ -31,6 +31,7 @@ from blazar.manager import exceptions
 from blazar.notification import api as notification_api
 from blazar.utils import service as service_utils
 from blazar.utils import trusts
+from blazar.utils.openstack import keystone
 
 manager_opts = [
     cfg.ListOpt('plugins',
@@ -49,7 +50,7 @@ manager_opts = [
     cfg.ListOpt('project_max_lease_durations',
                 default=[],
                 help='Maximum lease durations overriding the default for specific projects. '
-                     'Syntax is a comma-separated list of <project_id>:<seconds> pairs.'),
+                     'Syntax is a comma-separated list of <project_name>:<seconds> pairs.'),
     cfg.BoolOpt('usage_enforcement', default=False,
                 help='Enforce usage limits stored in a database.'),
     cfg.StrOpt('usage_db_host', default='127.0.0.1',
@@ -191,27 +192,26 @@ class ManagerService(service_utils.RPCServer):
 
         for kv in max_durations_config:
             try:
-                project_id, seconds = kv.split(':')
-                max_durations[project_id] = int(seconds)
+                project_name, seconds = kv.split(':')
+                max_durations[project_name] = int(seconds)
             except ValueError:
                 msg = "%s is not a valid project:max_duration pair" % kv
                 raise exceptions.ConfigurationError(error=msg)
         return max_durations
 
-    def _check_lease_duration_limit(self, lease_values):
+    def _check_lease_duration_limit(self, lease_values, project_name):
         start_date = lease_values['start_date']
         end_date = lease_values['end_date']
-        project_id = lease_values['project_id']
 
         lease_duration = end_date - start_date
         lease_duration_seconds = lease_duration.days * 86400 + lease_duration.seconds
-        if project_id in self.project_max_lease_durations:
-            project_max_lease_duration = self.project_max_lease_durations[project_id]
+        if project_name in self.project_max_lease_durations:
+            project_max_lease_duration = self.project_max_lease_durations[project_name]
             if project_max_lease_duration != -1:
                 if (lease_duration_seconds) > project_max_lease_duration:
                     raise common_ex.NotAuthorized(
                         'Lease is longer than maximum allowed of %d seconds for project %s' %
-                        (project_max_lease_duration, project_id))
+                        (project_max_lease_duration, project_name))
         elif CONF.manager.default_max_lease_duration != -1:
             if (lease_duration_seconds) > CONF.manager.default_max_lease_duration:
                 raise common_ex.NotAuthorized(
@@ -222,6 +222,22 @@ class ManagerService(service_utils.RPCServer):
 
     def list_leases(self, project_id=None):
         return db_api.lease_list(project_id)
+
+    def _get_user_name(self, user_id):
+        """Get user name from Keystone"""
+        client = keystone.BlazarKeystoneClient(username=CONF.os_admin_username,
+                                               password=CONF.os_admin_password,
+                                               tenant_name=CONF.os_admin_project_name)
+        user = client.users.get(user_id)
+        return user.name
+
+    def _get_project_name(self, project_id):
+        """Get project name from Keystone"""
+        client = keystone.BlazarKeystoneClient(username=CONF.os_admin_username,
+                                               password=CONF.os_admin_password,
+                                               tenant_name=CONF.os_admin_project_name)
+        project = client.projects.get(project_id)
+        return project.name
 
     def create_lease(self, lease_values):
         """Create a lease with reservations.
@@ -261,26 +277,26 @@ class ManagerService(service_utils.RPCServer):
             # NOTE(priteau): We should not get user_id from ctx, because we are
             # in the context of the trustee (blazar user).
             # lease_values['user_id'] is set in blazar/api/v1/service.py
-            lease_values['project_id'] = ctx.project_id
+            lease_values['project_id'] = project_id = ctx.project_id
             lease_values['start_date'] = start_date
             lease_values['end_date'] = end_date
-            project_id = lease_values['project_id']
+            project_name = self._get_project_name(project_id)
 
-            self._check_lease_duration_limit(lease_values)
+            self._check_lease_duration_limit(lease_values, project_name)
 
             if CONF.manager.usage_enforcement:
                 if not CONF.manager.usage_db_host:
                     raise common_ex.ConfigurationError('usage_db_host must be set')
                 try:
                     r = redis.StrictRedis(host=CONF.manager.usage_db_host, port=6379, db=0)
-                    allocated = r.hget('allocated', project_id)
+                    allocated = r.hget('allocated', project_name)
                     if allocated is None:
                         LOG.info('Setting project %s allocated to %f', CONF.manager.usage_default_allocated)
-                        r.hset('allocated', project_id, CONF.manager.usage_default_allocated)
-                    balance = r.hget('balance', project_id)
+                        r.hset('allocated', project_name, CONF.manager.usage_default_allocated)
+                    balance = r.hget('balance', project_name)
                     if balance is None:
                         LOG.info('Setting project %s balance to %f', CONF.manager.usage_default_allocated)
-                        r.hset('balance', project_id, CONF.manager.usage_default_allocated)
+                        r.hset('balance', project_name, CONF.manager.usage_default_allocated)
                 except redis.exceptions.ConnectionError:
                     LOG.exception('Cannot connect to redis server %s', CONF.manager.usage_db_host)
 
@@ -335,7 +351,7 @@ class ManagerService(service_utils.RPCServer):
                         self._create_reservation(reservation,
                                 usage_enforcement=CONF.manager.usage_enforcement,
                                 usage_db_host=CONF.manager.usage_db_host,
-                                project_id=project_id)
+                                project_name=project_name)
                 except (exceptions.UnsupportedResourceType,
                         common_ex.BlazarException):
                     LOG.exception("Failed to create reservation for a lease. "
@@ -420,6 +436,8 @@ class ManagerService(service_utils.RPCServer):
             raise common_ex.NotAuthorized(
                 'End date must be later than current and start date')
 
+        project_name = self._get_project_name(lease['project_id'])
+
         with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
             # To make tests happy...
             try:
@@ -436,7 +454,7 @@ class ManagerService(service_utils.RPCServer):
                     LOG.error("Invalid before_end_date param. %s" % e.message)
                     raise e
 
-            self._check_lease_duration_limit(values)
+            self._check_lease_duration_limit(values, project_name)
 
             # TODO(frossigneux) rollback if an exception is raised
             for reservation in (
@@ -449,7 +467,7 @@ class ManagerService(service_utils.RPCServer):
                     reservation,
                     usage_enforcement=CONF.manager.usage_enforcement,
                     usage_db_host=CONF.manager.usage_db_host,
-                    project_id=values['project_id'])
+                    project_name=project_name)
 
         event = db_api.event_get_first_sorted_by_filters(
             'lease_id',
@@ -496,6 +514,7 @@ class ManagerService(service_utils.RPCServer):
 
     def delete_lease(self, lease_id):
         lease = self.get_lease(lease_id)
+        project_name = self._get_project_name(lease['project_id'])
         if (datetime.datetime.utcnow() >= lease['start_date'] and
                 datetime.datetime.utcnow() <= lease['end_date']):
             start_event = db_api.event_get_first_sorted_by_filters(
@@ -526,12 +545,11 @@ class ManagerService(service_utils.RPCServer):
             for reservation in lease['reservations']:
                 if reservation['status'] != 'deleted':
                     plugin = self.plugins[reservation['resource_type']]
-                    project_id=lease['project_id']
                     try:
                         plugin.on_end(reservation['resource_id'],
                                       usage_enforcement=CONF.manager.usage_enforcement,
                                       usage_db_host=CONF.manager.usage_db_host,
-                                      project_id=project_id)
+                                      project_name=project_name)
                     except (db_ex.BlazarDBException, RuntimeError):
                         LOG.exception("Failed to delete a reservation "
                                       "for a lease.")
@@ -634,7 +652,7 @@ class ManagerService(service_utils.RPCServer):
                            status_reason=status_reason)
         lease_state.save()
 
-    def _create_reservation(self, values, usage_enforcement=None, usage_db_host=None, project_id=None):
+    def _create_reservation(self, values, usage_enforcement=None, usage_db_host=None, user_name=None, project_name=None):
         resource_type = values['resource_type']
         if resource_type not in self.plugins:
             raise exceptions.UnsupportedResourceType(resource_type)
@@ -646,7 +664,11 @@ class ManagerService(service_utils.RPCServer):
         reservation = db_api.reservation_create(reservation_values)
         resource_id = self.plugins[resource_type].reserve_resource(
             reservation['id'],
-            values
+            values,
+            usage_enforcement=usage_enforcement,
+            usage_db_host=usage_db_host,
+            user_name=user_name,
+            project_name=project_name
         )
         db_api.reservation_update(reservation['id'],
                                   {'resource_id': resource_id})
