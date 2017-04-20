@@ -47,8 +47,14 @@ manager_opts = [
                     'not be sent.'),
     cfg.IntOpt('default_max_lease_duration',
                default=-1,
-               help='Maximum lease duration in seconds. If '
-                    'this is set to -1, there is not limit'),
+               help='Maximum lease duration in seconds. If this is set to -1, there is not limit. '
+                    'For active leases, the limit applies between now and the new end date.'),
+    cfg.IntOpt('prolong_seconds_before_lease_end',
+               default=48 * 3600,
+               help='Number of seconds prior to lease end in which a user can '
+                    'request to prolong their lease beyond the maximum lease '
+                    'duration. If this is set to 0, then prolonging a lease beyond '
+                    'the maximum lease duration is not allowed.'),
     cfg.ListOpt('project_max_lease_durations',
                 default=[],
                 help='Maximum lease durations overriding the default for specific projects. '
@@ -59,7 +65,7 @@ manager_opts = [
                help='Hostname of the server hosting the usage DB. '
                'It must be a hostname, FQDN, or IP address.'),
     cfg.FloatOpt('usage_default_allocated', default=20000.0,
-               help='Default usage allocated if project missing from usage DB.')
+                 help='Default usage allocated if project missing from usage DB.')
 ]
 
 CONF = cfg.CONF
@@ -193,11 +199,24 @@ class ManagerService(service_utils.RPCServer):
                 raise exceptions.ConfigurationError(error=msg)
         return max_durations
 
-    def _check_lease_duration_limit(self, lease_values, project_name):
+    def _check_lease_duration_limit(self, lease_values, project_name, started=False, current_end_date=None):
         start_date = lease_values['start_date']
         end_date = lease_values['end_date']
 
+        now = datetime.datetime.utcnow()
+        now = datetime.datetime(now.year, now.month, now.day, now.hour,
+                                now.minute)
+
         lease_duration = end_date - start_date
+        if started:
+            # Note: an updated end date doesn't necessarily mean that the lease has been prolonged:
+            # 1) the end date can be brought closer to now (lease time is reduced)
+            # 2) the end date can be moved at the same time as the start date (lease is advanced/deferred)
+            # If a lease has already started, the start date cannot be moved, so 2) is not a problem.
+            prolong_allowed_from = current_end_date - datetime.timedelta(0, CONF.manager.prolong_seconds_before_lease_end, 0)
+            if (now >= prolong_allowed_from):
+                lease_duration = end_date - now
+
         lease_duration_seconds = lease_duration.days * 86400 + lease_duration.seconds
         if project_name in self.project_max_lease_durations:
             project_max_lease_duration = self.project_max_lease_durations[project_name]
@@ -207,6 +226,7 @@ class ManagerService(service_utils.RPCServer):
                         'Lease is longer than maximum allowed of %d seconds for project %s' %
                         (project_max_lease_duration, project_name))
         elif CONF.manager.default_max_lease_duration != -1:
+
             if (lease_duration_seconds) > CONF.manager.default_max_lease_duration:
                 raise common_ex.NotAuthorized(
                     'Lease is longer than maximum allowed of %d seconds' % CONF.manager.default_max_lease_duration)
@@ -430,7 +450,8 @@ class ManagerService(service_utils.RPCServer):
                     LOG.error("Invalid before_end_date param. %s" % e.message)
                     raise e
 
-            self._check_lease_duration_limit(values, project_name)
+            started = lease['start_date'] < now and now < lease['end_date']
+            self._check_lease_duration_limit(values, project_name, started, lease['end_date'])
 
             # TODO(frossigneux) rollback if an exception is raised
             for reservation in (
