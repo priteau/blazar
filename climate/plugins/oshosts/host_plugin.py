@@ -36,6 +36,8 @@ from climate.utils.openstack import keystone
 from climate.utils.openstack import nova
 from climate.utils import trusts
 
+from . import billrate
+
 plugin_opts = [
     cfg.StrOpt('on_end',
                default='on_end',
@@ -124,24 +126,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             'status': 'pending',
         }
 
-        # Check if we have enough available SUs for this reservation
-        if usage_enforcement:
-            try:
-                balance = float(r.hget('balance', project_name))
-                encumbered = float(r.hget('encumbered', project_name))
-                start_date = values['start_date']
-                end_date = values['end_date']
-                duration = end_date - start_date
-                hours = (duration.days * 86400 + duration.seconds) / 3600.0
-                requested = hours * float(values['max'])
-                left = balance - encumbered
-                if left - requested < 0:
-                    raise common_ex.NotAuthorized(
-                        'Reservation for project %s would spend %f SUs, only %f left' % (project_name, requested, left))
-            except redis.exceptions.ConnectionError:
-                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
-
-        db_api.host_reservation_create(host_values)
+        host_reservation = db_api.host_reservation_create(host_values)
         host_ids = self._matching_hosts(
             values['hypervisor_properties'],
             values['resource_properties'],
@@ -152,17 +137,33 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
         if not host_ids:
             pool.delete(pool_name)
             raise manager_ex.NotEnoughHostsAvailable()
-        for host_id in host_ids:
-            db_api.host_allocation_create({'compute_host_id': host_id,
-                                          'reservation_id': reservation['id']})
+
+        total_su_factor = sum(billrate.computehost_billrate(host_id) for host_id in host_ids)
+
+        # Check if we have enough available SUs for this reservation
+        if usage_enforcement:
+            try:
+                balance = float(r.hget('balance', project_name))
+                encumbered = float(r.hget('encumbered', project_name))
+                start_date = values['start_date']
+                end_date = values['end_date']
+                duration = end_date - start_date
+                hours = duration.total_seconds() / 3600.0
+                requested = hours * total_su_factor
+                left = balance - encumbered
+                if left - requested < 0:
+                    raise common_ex.NotAuthorized(
+                        'Reservation for project %s would spend %f SUs, only %f left' % (project_name, requested, left))
+            except redis.exceptions.ConnectionError:
+                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
         if usage_enforcement:
             try:
                 start_date = values['start_date']
                 end_date = values['end_date']
                 duration = end_date - start_date
-                hours = (duration.days * 86400 + duration.seconds) / 3600.0
-                encumbered = hours * len(host_ids)
+                hours = duration.total_seconds() / 3600.0
+                encumbered = hours * total_su_factor
                 LOG.info("Increasing encumbered for project %s by %s", project_name, encumbered)
                 r.hincrbyfloat('encumbered', project_name, str(encumbered))
                 LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
@@ -170,6 +171,10 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 r.hdel('user_exceptions', user_name)
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+
+        for host_id in host_ids:
+            db_api.host_allocation_create({'compute_host_id': host_id,
+                                          'reservation_id': reservation['id']})
 
     def update_reservation(self, reservation_id, values, usage_enforcement=False, usage_db_host=None, project_name=None):
         """Update reservation."""
