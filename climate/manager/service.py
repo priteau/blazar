@@ -199,7 +199,10 @@ class ManagerService(service_utils.RPCServer):
                 raise exceptions.ConfigurationError(error=msg)
         return max_durations
 
-    def _check_lease_duration_limit(self, lease_values, project_name, started=False, current_end_date=None):
+    def _check_lease_duration_limit(self, lease_values, user_name,
+                                    project_name, started=False,
+                                    current_end_date=None,
+                                    lease_exception=None):
         start_date = lease_values['start_date']
         end_date = lease_values['end_date']
 
@@ -218,7 +221,13 @@ class ManagerService(service_utils.RPCServer):
                 lease_duration = end_date - now
 
         lease_duration_seconds = lease_duration.days * 86400 + lease_duration.seconds
-        if project_name in self.project_max_lease_durations:
+        if lease_exception is not None:
+            lease_exception = int(lease_exception)
+            if lease_duration_seconds > lease_exception:
+                raise common_ex.NotAuthorized(
+                    'Lease is longer than maximum allowed of %d seconds for user %s' %
+                    (lease_exception, user_name))
+        elif project_name in self.project_max_lease_durations:
             project_max_lease_duration = self.project_max_lease_durations[project_name]
             if project_max_lease_duration != -1:
                 if (lease_duration_seconds) > project_max_lease_duration:
@@ -236,6 +245,14 @@ class ManagerService(service_utils.RPCServer):
 
     def list_leases(self, project_id=None):
         return db_api.lease_list(project_id)
+
+    def _get_user_name(self, user_id):
+        """Get user name from Keystone"""
+        client = keystone.ClimateKeystoneClient(username=CONF.climate_username,
+                                                password=CONF.climate_password,
+                                                tenant_name=CONF.climate_project_name)
+        user = client.users.get(user_id)
+        return user.name
 
     def _get_project_name(self, project_id):
         """Get project name from Keystone"""
@@ -279,13 +296,13 @@ class ManagerService(service_utils.RPCServer):
                 'Start date must later than current date')
 
         with trusts.create_ctx_from_trust(trust_id) as ctx:
-            lease_values['user_id'] = lease_values['user_id']
-            lease_values['project_id'] = project_id = ctx.project_id
+            lease_values['user_id'] = ctx.user_id
+            lease_values['project_id'] = ctx.project_id
             lease_values['start_date'] = start_date
             lease_values['end_date'] = end_date
-            project_name = self._get_project_name(project_id)
-
-            self._check_lease_duration_limit(lease_values, project_name)
+            user_name = self._get_user_name(lease_values['user_id'])
+            project_name = self._get_project_name(lease_values['project_id'])
+            lease_exception = None
 
             if CONF.manager.usage_enforcement:
                 if not CONF.manager.usage_db_host:
@@ -300,8 +317,11 @@ class ManagerService(service_utils.RPCServer):
                     if balance is None:
                         LOG.info('Setting project %s balance to %f', CONF.manager.usage_default_allocated)
                         r.hset('balance', project_name, CONF.manager.usage_default_allocated)
+                    lease_exception = r.hget('user_exceptions', user_name)
                 except redis.exceptions.ConnectionError:
                     LOG.exception('Cannot connect to redis server %s', CONF.manager.usage_db_host)
+
+            self._check_lease_duration_limit(lease_values, user_name, project_name, lease_exception=lease_exception)
 
             if not lease_values.get('events'):
                 lease_values['events'] = []
@@ -359,6 +379,7 @@ class ManagerService(service_utils.RPCServer):
                             self.plugins[resource_type].create_reservation(
                                 reservation, usage_enforcement=CONF.manager.usage_enforcement,
                                 usage_db_host=CONF.manager.usage_db_host,
+                                user_name=user_name,
                                 project_name=project_name)
                         else:
                             raise exceptions.UnsupportedResourceType(
@@ -432,6 +453,7 @@ class ManagerService(service_utils.RPCServer):
             raise common_ex.NotAuthorized(
                 'End date must be later than current and start date')
 
+        user_name = self._get_user_name(lease['user_id'])
         project_name = self._get_project_name(lease['project_id'])
 
         with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
@@ -451,7 +473,7 @@ class ManagerService(service_utils.RPCServer):
                     raise e
 
             started = lease['start_date'] < now and now < lease['end_date']
-            self._check_lease_duration_limit(values, project_name, started, lease['end_date'])
+            self._check_lease_duration_limit(values, user_name, project_name, started=started, current_end_date=lease['end_date'])
 
             # TODO(frossigneux) rollback if an exception is raised
             for reservation in (
