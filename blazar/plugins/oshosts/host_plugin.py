@@ -98,7 +98,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             project_name=CONF.os_admin_project_name,
             project_domain_name=CONF.os_admin_user_domain_name)
 
-    def reserve_resource(self, reservation_id, values, usage_enforcement=False, usage_db_host=None, project_name=None):
+    def reserve_resource(self, reservation_id, values, usage_enforcement=False, usage_db_host=None, user_name=None, project_name=None):
         """Create reservation."""
         self._check_params(values)
 
@@ -161,6 +161,8 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 LOG.info("Increasing encumbered for project %s by %s", project_name, encumbered)
                 r.hincrbyfloat('encumbered', project_name, str(encumbered))
                 LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
+                LOG.info("Removing lease exception for user %s", user_name)
+                r.hdel('user_exceptions', user_name)
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
