@@ -164,9 +164,10 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 end_date = values['end_date']
                 duration = end_date - start_date
                 hours = duration.total_seconds() / 3600.0
-                encumbered = hours * total_su_factor
-                LOG.info("Increasing encumbered for project %s by %s", project_name, encumbered)
-                r.hincrbyfloat('encumbered', project_name, str(encumbered))
+                change_encumbered = hours * total_su_factor
+                LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
+                    .format(project_name, change_encumbered, hours, total_su_factor))
+                r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
                 LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
                 LOG.info("Removing lease exception for user %s", user_name)
                 r.hdel('user_exceptions', user_name)
@@ -281,7 +282,8 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 change = new_duration - old_duration
                 hours = change.total_seconds() / 3600.0
                 change_encumbered = hours * total_su_factor
-                LOG.info("Increasing encumbered for project %s by %s", project_name, change_encumbered)
+                LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
+                    .format(project_name, change_encumbered, hours, total_su_factor))
                 r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
                 LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
             except redis.exceptions.ConnectionError:
@@ -335,6 +337,11 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                                            {'status': 'completed'})
 
             if usage_enforcement:
+                total_su_factor = sum(
+                    billrate.computehost_billrate(h['compute_host_id'])
+                    for h
+                    in allocations
+                )
                 try:
                     status = reservation['status']
                     if status in ['pending', 'active']:
@@ -344,9 +351,10 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                         elif reservation['status'] == 'active':
                             new_duration = datetime.datetime.utcnow() - lease['start_date']
                         change = new_duration - old_duration
-                        hours = (change.days * 86400 + change.seconds) / 3600.0
-                        change_encumbered = hours * len(allocations)
-                        LOG.info("Increasing encumbered for project %s by %s", project_name, change_encumbered)
+                        hours = change.total_seconds() / 3600.0
+                        change_encumbered = hours * total_su_factor
+                        LOG.info("Decreasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
+                            .format(project_name, -change_encumbered, hours, total_su_factor))
                         r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
                         LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
                 except redis.exceptions.ConnectionError:
