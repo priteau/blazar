@@ -191,18 +191,25 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
         hosts_in_pool = pool.get_computehosts(
             reservation['resource_id'])
 
+        host_allocations = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
+        total_su_factor = sum(
+            billrate.computehost_billrate(h['compute_host_id'])
+            for h
+            in host_allocations
+        )
+        LOG.info("SU usage rate: {}".format(total_su_factor))
+
         # Check if we have enough available SUs for update
         if usage_enforcement:
             try:
-                hosts = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
                 balance = float(r.hget('balance', project_name))
                 encumbered = float(r.hget('encumbered', project_name))
 
                 old_duration = lease['end_date'] - lease['start_date']
                 new_duration = values['end_date'] - values['start_date']
                 change = new_duration - old_duration
-                hours = (change.days * 86400 + change.seconds) / 3600.0
-                requested = hours * len(hosts)
+                hours = change.total_seconds() / 3600.0
+                requested = hours * total_su_factor
                 left = balance - encumbered
                 if left - requested < 0:
                     raise common_ex.NotAuthorized(
@@ -213,8 +220,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
         if (values['start_date'] < lease['start_date'] or
                 values['end_date'] > lease['end_date']):
             allocations = []
-            for allocation in db_api.host_allocation_get_all_by_values(
-                    reservation_id=reservation_id):
+            for allocation in host_allocations:
                 full_periods = db_utils.get_full_periods(
                     allocation['compute_host_id'],
                     values['start_date'],
@@ -270,12 +276,11 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         if usage_enforcement:
             try:
-                hosts = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
                 old_duration = lease['end_date'] - lease['start_date']
                 new_duration = values['end_date'] - values['start_date']
                 change = new_duration - old_duration
-                hours = (change.days * 86400 + change.seconds) / 3600.0
-                change_encumbered = hours * len(hosts)
+                hours = change.total_seconds() / 3600.0
+                change_encumbered = hours * total_su_factor
                 LOG.info("Increasing encumbered for project %s by %s", project_name, change_encumbered)
                 r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
                 LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))

@@ -765,7 +765,7 @@ def host_extra_capability_get_all_per_name(host_id, capability_name):
 
 
 def host_extra_capability_get_latest_per_name(host_id, capability_name):
-    session = get_session
+    session = get_session()
 
     with session.begin():
         query = _host_extra_capability_get_all_per_host(session, host_id)
