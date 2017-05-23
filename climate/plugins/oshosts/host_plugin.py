@@ -138,11 +138,10 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             pool.delete(pool_name)
             raise manager_ex.NotEnoughHostsAvailable()
 
-        total_su_factor = sum(billrate.computehost_billrate(host_id) for host_id in host_ids)
-        LOG.info("SU usage rate: {}".format(total_su_factor))
 
         # Check if we have enough available SUs for this reservation
         if usage_enforcement:
+            total_su_factor = sum(billrate.computehost_billrate(host_id) for host_id in host_ids)
             try:
                 balance = float(r.hget('balance', project_name))
                 encumbered = float(r.hget('encumbered', project_name))
@@ -158,7 +157,6 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
 
-        if usage_enforcement:
             try:
                 start_date = values['start_date']
                 end_date = values['end_date']
@@ -193,15 +191,15 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             reservation['resource_id'])
 
         host_allocations = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
-        total_su_factor = sum(
-            billrate.computehost_billrate(h['compute_host_id'])
-            for h
-            in host_allocations
-        )
-        LOG.info("SU usage rate: {}".format(total_su_factor))
+
 
         # Check if we have enough available SUs for update
         if usage_enforcement:
+            total_su_factor = sum(
+                billrate.computehost_billrate(h['compute_host_id'])
+                for h
+                in host_allocations
+            )
             try:
                 balance = float(r.hget('balance', project_name))
                 encumbered = float(r.hget('encumbered', project_name))
