@@ -139,6 +139,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             raise manager_ex.NotEnoughHostsAvailable()
 
         total_su_factor = sum(billrate.computehost_billrate(host_id) for host_id in host_ids)
+        LOG.info("SU usage rate: {}".format(total_su_factor))
 
         # Check if we have enough available SUs for this reservation
         if usage_enforcement:
@@ -171,6 +172,8 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 r.hdel('user_exceptions', user_name)
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+        else:
+            LOG.info("Usage enforcement not in effect")
 
         for host_id in host_ids:
             db_api.host_allocation_create({'compute_host_id': host_id,
