@@ -30,13 +30,13 @@ from climate.manager import exceptions as manager_ex
 from climate.openstack.common import log as logging
 from climate.plugins import base
 from climate.plugins import oshosts as plugin
+from climate.plugins.oshosts import billrate
 from climate.plugins.oshosts import nova_inventory
 from climate.plugins.oshosts import reservation_pool as rp
 from climate.utils.openstack import keystone
 from climate.utils.openstack import nova
 from climate.utils import trusts
 
-from . import billrate
 
 plugin_opts = [
     cfg.StrOpt('on_end',
@@ -51,6 +51,15 @@ plugin_opts = [
 CONF = cfg.CONF
 CONF.register_opts(plugin_opts, group=plugin.RESOURCE_TYPE)
 LOG = logging.getLogger(__name__)
+
+
+def dt_hours(dt):
+    return dt.total_seconds() / 3600.0
+
+
+def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
+    # math.isclose in Python 3.5+
+    return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 
 
 class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
@@ -138,7 +147,6 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             pool.delete(pool_name)
             raise manager_ex.NotEnoughHostsAvailable()
 
-
         # Check if we have enough available SUs for this reservation
         if usage_enforcement:
             total_su_factor = sum(billrate.computehost_billrate(host_id) for host_id in host_ids)
@@ -154,18 +162,9 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 if left - requested < 0:
                     raise common_ex.NotAuthorized(
                         'Reservation for project %s would spend %f SUs, only %f left' % (project_name, requested, left))
-            except redis.exceptions.ConnectionError:
-                LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
-
-            try:
-                start_date = values['start_date']
-                end_date = values['end_date']
-                duration = end_date - start_date
-                hours = duration.total_seconds() / 3600.0
-                change_encumbered = hours * total_su_factor
                 LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
-                    .format(project_name, change_encumbered, hours, total_su_factor))
-                r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
+                    .format(project_name, requested, hours, total_su_factor))
+                r.hincrbyfloat('encumbered', project_name, str(requested))
                 LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
                 LOG.info("Removing lease exception for user %s", user_name)
                 r.hdel('user_exceptions', user_name)
@@ -192,14 +191,14 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         host_allocations = db_api.host_allocation_get_all_by_values(reservation_id=reservation_id)
 
-
         # Check if we have enough available SUs for update
         if usage_enforcement:
-            total_su_factor = sum(
+            old_su_factor = sum(
                 billrate.computehost_billrate(h['compute_host_id'])
                 for h
                 in host_allocations
             )
+            new_su_factor = old_su_factor # may be altered later
             try:
                 balance = float(r.hget('balance', project_name))
                 encumbered = float(r.hget('encumbered', project_name))
@@ -208,31 +207,29 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 new_duration = values['end_date'] - values['start_date']
                 change = new_duration - old_duration
                 hours = change.total_seconds() / 3600.0
-                requested = hours * total_su_factor
+                estimated_requested = hours * old_su_factor
                 left = balance - encumbered
-                if left - requested < 0:
+                if left - estimated_requested < 0:
                     raise common_ex.NotAuthorized(
-                        'Update reservation would spend %f more SUs, only %f left' % (requested, left))
+                        'Update reservation would spend %f more SUs, only %f left' % (estimated_requested, left))
             except redis.exceptions.ConnectionError:
+                left = None
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+        else:
+            old_su_factor = new_su_factor = None
 
+        # if the time period is growing
         if (values['start_date'] < lease['start_date'] or
                 values['end_date'] > lease['end_date']):
-            allocations = []
+            allocations = [] # allocations to destroy
             for allocation in host_allocations:
                 full_periods = db_utils.get_full_periods(
                     allocation['compute_host_id'],
                     values['start_date'],
                     values['end_date'],
                     datetime.timedelta(seconds=1))
-                if lease['start_date'] < values['start_date']:
-                    max_start = values['start_date']
-                else:
-                    max_start = lease['start_date']
-                if lease['end_date'] < values['end_date']:
-                    min_end = lease['end_date']
-                else:
-                    min_end = values['end_date']
+                max_start = max(lease['start_date'], values['start_date'])
+                min_end = min(lease['end_date'], values['end_date'])
                 if not (len(full_periods) == 0 or
                         (len(full_periods) == 1 and
                          full_periods[0][0] == max_start and
@@ -263,8 +260,13 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                     pool.remove_computehost(reservation['resource_id'],
                                             old_hosts)
                 for allocation in allocations:
+                    LOG.debug("Dropping host {} from reservation {}".format(allocation['compute_host_id'], reservation_id))
                     db_api.host_allocation_destroy(allocation['id'])
+
+                    if usage_enforcement:
+                        new_su_factor -= billrate.computehost_billrate(allocation['compute_host_id'])
                 for host_id in host_ids:
+                    LOG.debug("Adding host {} to reservation {}".format(host_id, reservation_id))
                     db_api.host_allocation_create(
                         {'compute_host_id': host_id,
                          'reservation_id': reservation_id})
@@ -272,20 +274,34 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                         host = db_api.host_get(host_id)
                         pool.add_computehost(reservation['resource_id'],
                                              host['service_name'])
+                    if usage_enforcement:
+                        new_su_factor += billrate.computehost_billrate(host_id)
 
         if usage_enforcement:
-            try:
-                old_duration = lease['end_date'] - lease['start_date']
-                new_duration = values['end_date'] - values['start_date']
-                change = new_duration - old_duration
-                hours = change.total_seconds() / 3600.0
-                change_encumbered = hours * total_su_factor
+            old_hours = dt_hours(lease['end_date'] - lease['start_date'])
+            new_hours = dt_hours(values['end_date'] - values['start_date'])
+            change_hours = new_hours - old_hours
+            change_su_factor = new_su_factor - old_su_factor
+            change_encumbered = new_hours * new_su_factor - old_hours * old_su_factor
+            if left is not None:
+                if change_encumbered > left:
+                    common_ex.NotAuthorized(
+                        'Update reservation would spend %f more SUs, only %f left' % (requested, left))
+
+            if isclose(new_su_factor, old_su_factor, rel_tol=1e-5):
                 LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
-                    .format(project_name, change_encumbered, hours, total_su_factor))
+                    .format(project_name, change_encumbered, change_hours, new_su_factor))
+            else:
+                LOG.warning("SU factor changing from {} to {}".format(old_su_factor, new_su_factor))
+                LOG.info("Changing encumbered for project {} by {:.2f} (refunding {:.2f} hours @ {:.2f} SU/hr, adding {:.2f} hours @ {:.2f} SU/hr)"
+                    .format(project_name, change_encumbered, old_hours, old_su_factor, new_hours, new_su_factor))
+
+            try:
                 r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
-                LOG.info("Usage encumbered for project %s now %s", project_name, r.hget('encumbered', project_name))
+                new_encumbered = r.hget('encumbered', project_name)
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
+            LOG.info("Usage encumbered for project %s now %s", project_name, new_encumbered)
 
     def on_start(self, resource_id):
         """Add the hosts in the pool."""
