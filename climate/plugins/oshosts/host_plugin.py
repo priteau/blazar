@@ -54,8 +54,7 @@ CONF.register_opts(plugin_opts, group=plugin.RESOURCE_TYPE)
 LOG = logging.getLogger(__name__)
 
 
-class BillingError(common_ex.ClimateException):
-    code = 400
+BillingError = common_ex.NotAuthorized
 
 
 def dt_hours(dt):
@@ -166,7 +165,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 left = balance - encumbered
                 if left - requested < 0:
                     raise BillingError(
-                        'Reservation for project %s would spend %f SUs, only %f left' % (project_name, requested, left))
+                        'Reservation for project {} would spend {:.2f} SUs, only {:.2f} left'.format(project_name, requested, left))
                 LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
                     .format(project_name, requested, hours, total_su_factor))
                 r.hincrbyfloat('encumbered', project_name, str(requested))
@@ -216,7 +215,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 left = balance - encumbered
                 if left - estimated_requested < 0:
                     raise BillingError(
-                        'Update reservation would spend %f more SUs, only %f left' % (estimated_requested, left))
+                        'Update reservation would spend {:.2f} more SUs, only {:.2f} left'.format(estimated_requested, left))
             except redis.exceptions.ConnectionError:
                 left = None
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
@@ -259,6 +258,22 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 if not host_ids:
                     raise manager_ex.NotEnoughHostsAvailable()
 
+                if usage_enforcement:
+                    for allocation in allocations:
+                        new_su_factor -= billrate.computehost_billrate(allocation['compute_host_id'])
+                    for host_id in host_ids:
+                        new_su_factor += billrate.computehost_billrate(host_id)
+
+                    if not isclose(new_su_factor, old_su_factor, rel_tol=1e-5):
+                        LOG.warning("SU factor changing from {} to {}"
+                                    .format(old_su_factor, new_su_factor))
+                        LOG.warning("Refusing factor change!")
+                        # XXX easier for usage-reporting, but could probably allow
+                        # not-yet-started reservations to be modified without much trouble.
+                        raise BillingError("Modifying a reservation that changes the SU cost is prohibited")
+
+                # XXX computehost changes below are not undone on error,
+                # must verify policy beforehand.
                 if hosts_in_pool:
                     old_hosts = [db_api.host_get(allocation['compute_host_id'])['service_name']
                                  for allocation in allocations]
@@ -268,8 +283,6 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                     LOG.debug("Dropping host {} from reservation {}".format(allocation['compute_host_id'], reservation_id))
                     db_api.host_allocation_destroy(allocation['id'])
 
-                    if usage_enforcement:
-                        new_su_factor -= billrate.computehost_billrate(allocation['compute_host_id'])
                 for host_id in host_ids:
                     LOG.debug("Adding host {} to reservation {}".format(host_id, reservation_id))
                     db_api.host_allocation_create(
@@ -279,8 +292,6 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                         host = db_api.host_get(host_id)
                         pool.add_computehost(reservation['resource_id'],
                                              host['service_name'])
-                    if usage_enforcement:
-                        new_su_factor += billrate.computehost_billrate(host_id)
 
         if usage_enforcement:
             old_hours = dt_hours(lease['end_date'] - lease['start_date'])
@@ -288,22 +299,16 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             change_hours = new_hours - old_hours
             change_su_factor = new_su_factor - old_su_factor
             change_encumbered = new_hours * new_su_factor - old_hours * old_su_factor
-            if left is not None:
+            if left is not None: # maybe computed above, if redis was available
                 if change_encumbered > left:
                     raise BillingError('Update reservation would spend {:.2f} more '
                                        'SUs, only {:.2f} left'.format(requested, left))
 
-            if isclose(new_su_factor, old_su_factor, rel_tol=1e-5):
-                LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
-                    .format(project_name, change_encumbered, change_hours, new_su_factor))
-            else:
-                LOG.warning("SU factor changing from {} to {}"
-                            .format(old_su_factor, new_su_factor))
-                # LOG.info("Changing encumbered for project {} by {:.2f} (refunding {:.2f} hours @ {:.2f} SU/hr, adding {:.2f} hours @ {:.2f} SU/hr)"
-                #     .format(project_name, change_encumbered, old_hours, old_su_factor, new_hours, new_su_factor))
-                LOG.warning("Refusing factor change!")
-                # XXX easier for usage-reporting, but could probably allow not-yet-started reservations to be modified without much trouble.
-                raise BillingError("Modifying a reservation that changes the SU cost is prohibited")
+            LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
+                .format(project_name, change_encumbered, change_hours, new_su_factor))
+
+            if not isclose(new_su_factor, old_su_factor, rel_tol=1e-5):
+                LOG.warning('Violated assertion: new/old su_factor expected to be identical')
 
             try:
                 r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
