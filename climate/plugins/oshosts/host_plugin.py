@@ -28,6 +28,7 @@ from climate.db import exceptions as db_ex
 from climate.db import utils as db_utils
 from climate.manager import exceptions as manager_ex
 from climate.openstack.common import log as logging
+from climate.openstack.common.gettextutils import _
 from climate.plugins import base
 from climate.plugins import oshosts as plugin
 from climate.plugins.oshosts import billrate
@@ -51,6 +52,10 @@ plugin_opts = [
 CONF = cfg.CONF
 CONF.register_opts(plugin_opts, group=plugin.RESOURCE_TYPE)
 LOG = logging.getLogger(__name__)
+
+
+class BillingError(common_ex.ClimateException):
+    code = 400
 
 
 def dt_hours(dt):
@@ -160,7 +165,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 requested = hours * total_su_factor
                 left = balance - encumbered
                 if left - requested < 0:
-                    raise common_ex.NotAuthorized(
+                    raise BillingError(
                         'Reservation for project %s would spend %f SUs, only %f left' % (project_name, requested, left))
                 LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
                     .format(project_name, requested, hours, total_su_factor))
@@ -210,7 +215,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 estimated_requested = hours * old_su_factor
                 left = balance - encumbered
                 if left - estimated_requested < 0:
-                    raise common_ex.NotAuthorized(
+                    raise BillingError(
                         'Update reservation would spend %f more SUs, only %f left' % (estimated_requested, left))
             except redis.exceptions.ConnectionError:
                 left = None
@@ -285,23 +290,28 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
             change_encumbered = new_hours * new_su_factor - old_hours * old_su_factor
             if left is not None:
                 if change_encumbered > left:
-                    common_ex.NotAuthorized(
-                        'Update reservation would spend %f more SUs, only %f left' % (requested, left))
+                    raise BillingError('Update reservation would spend {:.2f} more '
+                                       'SUs, only {:.2f} left'.format(requested, left))
 
             if isclose(new_su_factor, old_su_factor, rel_tol=1e-5):
                 LOG.info("Increasing encumbered for project {} by {:.2f} ({:.2f} hours @ {:.2f} SU/hr)"
                     .format(project_name, change_encumbered, change_hours, new_su_factor))
             else:
-                LOG.warning("SU factor changing from {} to {}".format(old_su_factor, new_su_factor))
-                LOG.info("Changing encumbered for project {} by {:.2f} (refunding {:.2f} hours @ {:.2f} SU/hr, adding {:.2f} hours @ {:.2f} SU/hr)"
-                    .format(project_name, change_encumbered, old_hours, old_su_factor, new_hours, new_su_factor))
+                LOG.warning("SU factor changing from {} to {}"
+                            .format(old_su_factor, new_su_factor))
+                # LOG.info("Changing encumbered for project {} by {:.2f} (refunding {:.2f} hours @ {:.2f} SU/hr, adding {:.2f} hours @ {:.2f} SU/hr)"
+                #     .format(project_name, change_encumbered, old_hours, old_su_factor, new_hours, new_su_factor))
+                LOG.warning("Refusing factor change!")
+                # XXX easier for usage-reporting, but could probably allow not-yet-started reservations to be modified without much trouble.
+                raise BillingError("Modifying a reservation that changes the SU cost is prohibited")
 
             try:
                 r.hincrbyfloat('encumbered', project_name, str(change_encumbered))
-                new_encumbered = r.hget('encumbered', project_name)
+                new_encumbered = float(r.hget('encumbered', project_name))
             except redis.exceptions.ConnectionError:
                 LOG.exception("cannot connect to redis host %s", CONF.manager.usage_db_host)
-            LOG.info("Usage encumbered for project %s now %s", project_name, new_encumbered)
+            LOG.info("Usage encumbered for project {} now {:.2f}"
+                     .format(project_name, new_encumbered))
 
     def on_start(self, resource_id):
         """Add the hosts in the pool."""
