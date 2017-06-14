@@ -296,11 +296,10 @@ class ManagerService(service_utils.RPCServer):
                 'Start date must later than current date')
 
         with trusts.create_ctx_from_trust(trust_id) as ctx:
-            lease_values['user_id'] = ctx.user_id
             lease_values['project_id'] = ctx.project_id
             lease_values['start_date'] = start_date
             lease_values['end_date'] = end_date
-            user_name = lease_values['user_id']
+            user_name = self._get_user_name(lease_values['user_id'])
             project_name = self._get_project_name(lease_values['project_id'])
             lease_exception = None
 
@@ -453,7 +452,7 @@ class ManagerService(service_utils.RPCServer):
             raise common_ex.NotAuthorized(
                 'End date must be later than current and start date')
 
-        user_name = lease['user_id']
+        user_name = self._get_user_name(lease['user_id'])
         project_name = self._get_project_name(lease['project_id'])
 
         with trusts.create_ctx_from_trust(lease['trust_id']) as ctx:
