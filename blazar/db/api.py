@@ -312,9 +312,9 @@ def host_allocation_get_all_by_values(**kwargs):
 # TODO(frossigneux) get methods
 
 
-def host_allocation_destroy(allocation_id):
+def host_allocation_destroy(allocation_id, soft_delete=True):
     """Delete specific allocation."""
-    IMPL.host_allocation_destroy(allocation_id)
+    IMPL.host_allocation_destroy(allocation_id, soft_delete)
 
 
 def host_allocation_update(allocation_id, allocation_values):

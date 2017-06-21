@@ -583,7 +583,7 @@ def host_allocation_update(host_allocation_id, values):
     return host_allocation_get(host_allocation_id)
 
 
-def host_allocation_destroy(host_allocation_id):
+def host_allocation_destroy(host_allocation_id, soft_delete=True):
     session = get_session()
     with session.begin():
         host_allocation = _host_allocation_get(session,
@@ -594,7 +594,10 @@ def host_allocation_destroy(host_allocation_id):
             raise db_exc.BlazarDBNotFound(
                 id=host_allocation_id, model='ComputeHostAllocation')
 
-        host_allocation.soft_delete(session=session)
+        if soft_delete:
+            host_allocation.soft_delete(session=session)
+        else:
+            session.delete(host_allocation)
 
 
 # ComputeHost

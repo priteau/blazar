@@ -242,7 +242,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                     pool.remove_computehost(host_reservation['aggregate_id'],
                                             old_hostnames)
                 for allocation in allocations:
-                    db_api.host_allocation_destroy(allocation['id'])
+                    db_api.host_allocation_destroy(allocation['id'], soft_delete=False)
                 for host_id in host_ids:
                     db_api.host_allocation_create(
                         {'compute_host_id': host_id,
