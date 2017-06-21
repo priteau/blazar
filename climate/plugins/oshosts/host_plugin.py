@@ -281,7 +281,7 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                                             old_hosts)
                 for allocation in allocations:
                     LOG.debug("Dropping host {} from reservation {}".format(allocation['compute_host_id'], reservation_id))
-                    db_api.host_allocation_destroy(allocation['id'])
+                    db_api.host_allocation_destroy(allocation['id'], soft_delete=False)
 
                 for host_id in host_ids:
                     LOG.debug("Adding host {} to reservation {}".format(host_id, reservation_id))
