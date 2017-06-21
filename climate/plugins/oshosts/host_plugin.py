@@ -239,13 +239,9 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                          full_periods[0][0] == max_start and
                          full_periods[0][1] == min_end)):
                     allocations.append(allocation)
-                    if (hosts_in_pool and
-                            self.nova.hypervisors.get(
-                                self._get_hypervisor_from_name_or_id(
-                                    allocation['compute_host_id'])
-                            ).__dict__['running_vms'] > 0):
-                        raise manager_ex.NotEnoughHostsAvailable()
             if allocations:
+		if reservation['status'] == 'active':
+		    raise manager_ex.NotEnoughHostsAvailable()
                 host_reservation = (
                     db_api.host_reservation_get_by_reservation_id(
                         reservation_id))
