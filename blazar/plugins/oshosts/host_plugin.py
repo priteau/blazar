@@ -381,6 +381,8 @@ class PhysicalHostPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 in allocations
             )
             try:
+                reservation = db_api.reservation_get(host_reservation['reservation_id'])
+                lease = db_api.lease_get(reservation['lease_id'])
                 status = reservation['status']
                 if status in ['pending', 'active']:
                     old_duration = lease['end_date'] - lease['start_date']
