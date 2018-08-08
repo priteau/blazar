@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import datetime
 
 import eventlet
@@ -206,7 +207,7 @@ class ServiceTestCase(tests.TestCase):
         event_update = self.patch(self.db_api, 'event_update')
         events.return_value = None
 
-        self.manager._event()
+        self.manager._process_events()
 
         self.assertFalse(event_update.called)
 
@@ -217,7 +218,7 @@ class ServiceTestCase(tests.TestCase):
                                'event_type': 'end_lease',
                                'lease_id': self.lease_id}
 
-        self.manager._event()
+        self.manager._process_events()
 
         event_update.assert_called_once_with('111-222-333',
                                              {'status': 'IN_PROGRESS'})
