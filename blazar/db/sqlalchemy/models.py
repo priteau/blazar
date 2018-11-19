@@ -243,3 +243,62 @@ class ComputeHostExtraCapability(mb.BlazarBase):
 
     def to_dict(self):
         return super(ComputeHostExtraCapability, self).to_dict()
+
+
+class NetworkSegment(mb.BlazarBase):
+    """Description
+
+    Specifies resources asked by reservation from Network Reservation API.
+    """
+
+    __tablename__ = 'network_segments'
+
+    __table_args__ = (
+        sa.UniqueConstraint('network_type', 'physical_network', 'segment_id'),
+    )
+
+    id = _id_column()
+    # The physical mechanism by which the virtual network is implemented. For example: flat, geneve, gre, local, vlan, vxlan.
+    network_type = sa.Column(sa.String(255), nullable=False)
+    # Name of the physical network over which the virtual network is implemented
+    physical_network = sa.Column(sa.String(255), nullable=False)
+    # VLAN ID for VLAN networks or Tunnel ID for GENEVE/GRE/VXLAN networks
+    segment_id = sa.Column(sa.Integer, nullable=False)
+
+    def to_dict(self):
+        return super(NetworkSegment, self).to_dict()
+
+
+class NetworkReservation(mb.BlazarBase):
+    """Description
+
+    Specifies resources asked by reservation from
+    Network Reservation API.
+    """
+
+    __tablename__ = 'network_reservations'
+
+    id = _id_column()
+    reservation_id = sa.Column(sa.String(36), sa.ForeignKey('reservations.id'))
+    resource_properties = sa.Column(MediumText())
+    hypervisor_properties = sa.Column(MediumText())
+    before_end = sa.Column(sa.String(36))
+    network_name = sa.Column(sa.String(255))
+
+    def to_dict(self):
+        return super(NetworkReservation, self).to_dict()
+
+
+class NetworkAllocation(mb.BlazarBase):
+    """Mapping between NetworkSegment, NetworkReservation and Reservation."""
+
+    __tablename__ = 'network_allocations'
+
+    id = _id_column()
+    network_id = sa.Column(sa.String(36),
+                           sa.ForeignKey('network_segments.id'))
+    reservation_id = sa.Column(sa.String(36),
+                               sa.ForeignKey('reservations.id'))
+
+    def to_dict(self):
+        return super(NetworkAllocation, self).to_dict()
