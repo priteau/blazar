@@ -281,7 +281,7 @@ class NetworkReservation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
     id = _id_column()
     reservation_id = sa.Column(sa.String(36), sa.ForeignKey('reservations.id'))
     resource_properties = sa.Column(MediumText())
-    hypervisor_properties = sa.Column(MediumText())
+    network_properties = sa.Column(MediumText())
     before_end = sa.Column(sa.String(36))
     network_name = sa.Column(sa.String(255))
     network_id = sa.Column(sa.String(255))

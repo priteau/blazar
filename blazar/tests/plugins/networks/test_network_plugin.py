@@ -58,11 +58,9 @@ class PhysicalNetworkPluginSetupOnlyTestCase(tests.TestCase):
         self.patch(base, 'url_for').return_value = 'http://foo.bar'
         self.network_plugin = network_plugin
         self.fake_network_plugin = self.network_plugin.PhysicalNetworkPlugin()
-        self.nova = nova
-        self.rp_create = self.patch(self.nova.ReservationPool, 'create')
         self.db_api = db_api
-        self.db_host_extra_capability_get_all_per_host = (
-            self.patch(self.db_api, 'host_extra_capability_get_all_per_host'))
+        self.db_network_extra_capability_get_all_per_network = (
+            self.patch(self.db_api, 'network_extra_capability_get_all_per_network'))
 
     def test_configuration(self):
         self.assertEqual("fake-user", self.fake_network_plugin.username)
@@ -82,9 +80,9 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
         self.context = context
         self.patch(self.context, 'BlazarContext')
 
-        self.nova_client = nova_client
-        self.nova_client = self.patch(self.nova_client, 'Client').return_value
-        self.neutron = neutron_client
+        self.neutron_client = neutron_client
+        self.neutron_client = self.patch(
+            self.neutron_client, 'Client').return_value
         self.identity = identity
         self.session = session
 
@@ -121,31 +119,18 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
         self.db_network_update = self.patch(self.db_api, 'network_update')
         self.db_network_destroy = self.patch(self.db_api, 'network_destroy')
 
-        self.db_host_extra_capability_get_all_per_host = self.patch(
-            self.db_api, 'host_extra_capability_get_all_per_host')
+        self.db_network_extra_capability_get_all_per_network = self.patch(
+            self.db_api, 'network_extra_capability_get_all_per_network')
 
-        self.db_host_extra_capability_get_all_per_name = self.patch(
-            self.db_api, 'host_extra_capability_get_all_per_name')
+        self.db_network_extra_capability_get_all_per_name = self.patch(
+            self.db_api, 'network_extra_capability_get_all_per_name')
 
-        self.db_host_extra_capability_create = self.patch(
-            self.db_api, 'host_extra_capability_create')
+        self.db_network_extra_capability_create = self.patch(
+            self.db_api, 'network_extra_capability_create')
 
-        self.db_host_extra_capability_update = self.patch(
-            self.db_api, 'host_extra_capability_update')
+        self.db_network_extra_capability_update = self.patch(
+            self.db_api, 'network_extra_capability_update')
 
-        self.nova = nova
-        self.rp_create = self.patch(self.nova.ReservationPool, 'create')
-        self.patch(self.nova.ReservationPool, 'get_aggregate_from_name_or_id')
-        self.add_compute_host = self.patch(self.nova.ReservationPool,
-                                           'add_computehost')
-        self.remove_compute_host = self.patch(self.nova.ReservationPool,
-                                              'remove_computehost')
-        self.get_host_details = self.patch(self.nova.NovaInventory,
-                                           'get_host_details')
-        self.get_host_details.return_value = self.fake_network
-        self.get_servers_per_host = self.patch(
-            self.nova.NovaInventory, 'get_servers_per_host')
-        self.get_servers_per_host.return_value = None
         self.get_extra_capabilities = self.patch(
             self.fake_network_plugin, '_get_extra_capabilities')
 
@@ -287,7 +272,6 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
                           self.fake_network_plugin.reserve_resource,
                           u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
                           values)
-        self.rp_create.assert_not_called()
         network_reservation_create.assert_not_called()
 
     def test_create_reservation_networks_available(self):
@@ -304,7 +288,6 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
             'resource_type': plugin.RESOURCE_TYPE,
             'network_name': 'foo-net'
         }
-        self.rp_create.return_value = mock.MagicMock(id=1)
         lease_get = self.patch(self.db_api, 'lease_get')
         lease_get.return_value = lease
         network_reservation_create = self.patch(self.db_api,
@@ -382,12 +365,13 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
     #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
+    #     network_reservation_get = self.patch(
+    #         self.db_api, 'network_reservation_get')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_not_called()
+    #     network_reservation_get.assert_not_called()
     #
     # def test_update_reservation_extend(self):
     #     values = {
@@ -405,42 +389,41 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
     #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
-    #         'count_range': '1-1',
-    #         'hypervisor_properties': '["=", "$memory_mb", "256"]',
+    #     network_reservation_get = self.patch(
+    #         self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
+    #     network_allocation_get_all = self.patch(
     #         self.db_api,
-    #         'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #         'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'network_id': 'network1'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [{'id': 'host1'}]
+    #     network_get_all_by_queries = self.patch(
+    #         self.db_api, 'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [{'id': 'network1'}]
     #     get_reserved_periods = self.patch(self.db_utils,
     #                                       'get_reserved_periods')
     #     get_reserved_periods.return_value = [
     #         (datetime.datetime(2013, 12, 19, 20, 00),
     #          datetime.datetime(2013, 12, 19, 21, 00))
     #     ]
-    #     host_allocation_create = self.patch(
+    #     network_allocation_create = self.patch(
     #         self.db_api,
-    #         'host_allocation_create')
-    #     host_allocation_destroy = self.patch(
+    #         'network_allocation_create')
+    #     network_allocation_destroy = self.patch(
     #         self.db_api,
-    #         'host_allocation_destroy')
+    #         'network_allocation_destroy')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_allocation_create.assert_not_called()
-    #     host_allocation_destroy.assert_not_called()
+    #     network_allocation_create.assert_not_called()
+    #     network_allocation_destroy.assert_not_called()
     #
     # def test_update_reservation_move_failure(self):
     #     values = {
@@ -458,39 +441,39 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
     #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(
+    #     network_reservation_get = self.patch(
     #         self.db_api,
-    #         'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #         'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'count_range': '1-1',
-    #         'hypervisor_properties': '["=", "$memory_mb", "256"]',
+    #         'network_properties': '["=", "$memory_mb", "256"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
+    #     network_allocation_get_all = self.patch(
     #         self.db_api,
-    #         'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #         'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [{'id': 'host1'}]
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [{'id': 'network1'}]
     #     get_reserved_periods = self.patch(self.db_utils,
     #                                       'get_reserved_periods')
     #     get_reserved_periods.return_value = [
     #         (datetime.datetime(2013, 12, 20, 20, 30),
     #          datetime.datetime(2013, 12, 20, 21, 00))
     #     ]
-    #     get_computehosts = self.patch(self.nova.ReservationPool,
-    #                                   'get_computehosts')
-    #     get_computehosts.return_value = ['host1']
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = []
+    #     get_computenetworks = self.patch(self.nova.ReservationPool,
+    #                                   'get_computenetworks')
+    #     get_computenetworks.return_value = ['network1']
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = []
     #     self.assertRaises(
-    #         manager_exceptions.NotEnoughHostsAvailable,
+    #         manager_exceptions.NotEnoughnetworksAvailable,
     #         self.fake_network_plugin.update_reservation,
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
@@ -512,44 +495,44 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
     #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(
+    #     network_reservation_get = self.patch(
     #         self.db_api,
-    #         'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #         'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'count_range': '1-1',
-    #         'hypervisor_properties': '["=", "$memory_mb", "256"]',
+    #         'network_properties': '["=", "$memory_mb", "256"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
+    #     network_allocation_get_all = self.patch(
     #         self.db_api,
-    #         'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #         'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [{'id': 'host1'}]
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [{'id': 'network1'}]
     #     get_reserved_periods = self.patch(self.db_utils,
     #                                       'get_reserved_periods')
     #     get_reserved_periods.return_value = [
     #         (datetime.datetime(2013, 12, 19, 20, 30),
     #          datetime.datetime(2013, 12, 19, 21, 00))
     #     ]
-    #     host_allocation_create = self.patch(
+    #     network_allocation_create = self.patch(
     #         self.db_api,
-    #         'host_allocation_create')
-    #     host_allocation_destroy = self.patch(
+    #         'network_allocation_create')
+    #     network_allocation_destroy = self.patch(
     #         self.db_api,
-    #         'host_allocation_destroy')
+    #         'network_allocation_destroy')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_allocation_create.assert_not_called()
-    #     host_allocation_destroy.assert_not_called()
+    #     network_allocation_create.assert_not_called()
+    #     network_allocation_destroy.assert_not_called()
     #
     # def test_update_reservation_move_realloc(self):
     #     values = {
@@ -567,52 +550,52 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
     #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(
+    #     network_reservation_get = self.patch(
     #         self.db_api,
-    #         'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #         'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'aggregate_id': 1,
     #         'count_range': '1-1',
-    #         'hypervisor_properties': '["=", "$memory_mb", "256"]',
+    #         'network_properties': '["=", "$memory_mb", "256"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
+    #     network_allocation_get_all = self.patch(
     #         self.db_api,
-    #         'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #         'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [{'id': 'host1'},
-    #                                             {'id': 'host2'}]
-    #     host_allocation_create = self.patch(
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [{'id': 'network1'},
+    #                                             {'id': 'network2'}]
+    #     network_allocation_create = self.patch(
     #         self.db_api,
-    #         'host_allocation_create')
-    #     host_allocation_destroy = self.patch(
+    #         'network_allocation_create')
+    #     network_allocation_destroy = self.patch(
     #         self.db_api,
-    #         'host_allocation_destroy')
+    #         'network_allocation_destroy')
     #     get_reserved_periods = self.patch(self.db_utils,
     #                                       'get_reserved_periods')
     #     get_reserved_periods.return_value = [
     #         (datetime.datetime(2013, 12, 20, 20, 30),
     #          datetime.datetime(2013, 12, 20, 21, 00))
     #     ]
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = ['host2']
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = ['network2']
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_called_with(
+    #     network_reservation_get.assert_called_with(
     #         u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     host_allocation_destroy.assert_called_with(
+    #     network_allocation_destroy.assert_called_with(
     #         'dd305477-4df8-4547-87f6-69069ee546a6')
-    #     host_allocation_create.assert_called_with(
+    #     network_allocation_create.assert_called_with(
     #         {
-    #             'compute_host_id': 'host2',
+    #             'compute_network_id': 'network2',
     #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
     #         }
     #     )
@@ -634,64 +617,64 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '2-3',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'},
-    #         {'id': 'host3'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'},
+    #         {'id': 'network3'}
     #     ]
-    #     host_allocation_destroy = self.patch(self.db_api,
-    #                                          'host_allocation_destroy')
-    #     host_allocation_create = self.patch(self.db_api,
-    #                                         'host_allocation_create')
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = ['host3']
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     network_allocation_destroy = self.patch(self.db_api,
+    #                                          'network_allocation_destroy')
+    #     network_allocation_create = self.patch(self.db_api,
+    #                                         'network_allocation_create')
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = ['network3']
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
     #     self.check_usage_against_allocation_pre_update.assert_called_once_with(
     #         values, lease_get.return_value,
-    #         host_allocation_get_all.return_value)
-    #     host_reservation_get.assert_called_with(
+    #         network_allocation_get_all.return_value)
+    #     network_reservation_get.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_hosts.assert_called_with(
+    #     matching_networks.assert_called_with(
     #         '["=", "$memory_mb", "16384"]',
     #         '',
     #         '1-1',
     #         datetime.datetime(2017, 7, 12, 20, 00),
     #         datetime.datetime(2017, 7, 12, 21, 00)
     #     )
-    #     host_allocation_destroy.assert_not_called()
-    #     host_allocation_create.assert_called_with(
+    #     network_allocation_destroy.assert_not_called()
+    #     network_allocation_create.assert_called_with(
     #         {
-    #             'compute_host_id': 'host3',
+    #             'compute_network_id': 'network3',
     #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
     #         }
     #     )
-    #     host_reservation_update.assert_called_with(
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         {'count_range': '3-3'}
     #     )
@@ -713,40 +696,40 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '2-3',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'}
     #     ]
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = []
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = []
     #
     #     self.assertRaises(
-    #         manager_exceptions.NotEnoughHostsAvailable,
+    #         manager_exceptions.NotEnoughnetworksAvailable,
     #         self.fake_network_plugin.update_reservation,
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     matching_hosts.assert_called_with(
+    #     matching_networks.assert_called_with(
     #         '["=", "$memory_mb", "16384"]',
     #         '',
     #         '1-1',
@@ -771,46 +754,46 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '2-2',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'}
     #     ]
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     host_allocation_destroy = self.patch(self.db_api,
-    #                                          'host_allocation_destroy')
-    #     host_allocation_create = self.patch(self.db_api,
-    #                                         'host_allocation_create')
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     network_allocation_destroy = self.patch(self.db_api,
+    #                                          'network_allocation_destroy')
+    #     network_allocation_create = self.patch(self.db_api,
+    #                                         'network_allocation_create')
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     matching_hosts.assert_not_called()
-    #     host_allocation_destroy.assert_not_called()
-    #     host_allocation_create.assert_not_called()
-    #     host_reservation_update.assert_called_with(
+    #     matching_networks.assert_not_called()
+    #     network_allocation_destroy.assert_not_called()
+    #     network_allocation_create.assert_not_called()
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         {'count_range': '1-2'}
     #     )
@@ -832,61 +815,61 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '1-2',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'},
-    #         {'id': 'host3'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'},
+    #         {'id': 'network3'}
     #     ]
-    #     host_allocation_destroy = self.patch(self.db_api,
-    #                                          'host_allocation_destroy')
-    #     host_allocation_create = self.patch(self.db_api,
-    #                                         'host_allocation_create')
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = ['host3']
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     network_allocation_destroy = self.patch(self.db_api,
+    #                                          'network_allocation_destroy')
+    #     network_allocation_create = self.patch(self.db_api,
+    #                                         'network_allocation_create')
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = ['network3']
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_called_with(
+    #     network_reservation_get.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_hosts.assert_called_with(
+    #     matching_networks.assert_called_with(
     #         '["=", "$memory_mb", "16384"]',
     #         '',
     #         '0-1',
     #         datetime.datetime(2017, 7, 12, 20, 00),
     #         datetime.datetime(2017, 7, 12, 21, 00)
     #     )
-    #     host_allocation_destroy.assert_not_called()
-    #     host_allocation_create.assert_called_with(
+    #     network_allocation_destroy.assert_not_called()
+    #     network_allocation_create.assert_called_with(
     #         {
-    #             'compute_host_id': 'host3',
+    #             'compute_network_id': 'network3',
     #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
     #         }
     #     )
-    #     host_reservation_update.assert_called_with(
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         {'count_range': '1-3'}
     #     )
@@ -908,69 +891,69 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '1-2',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': '',
     #         'reservation_id': u'706eb3bc-07ed-4383-be93-b32845ece672',
     #         'aggregate_id': 1,
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'},
-    #         {'id': 'host3'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'},
+    #         {'id': 'network3'}
     #     ]
-    #     host_allocation_destroy = self.patch(self.db_api,
-    #                                          'host_allocation_destroy')
-    #     host_allocation_create = self.patch(self.db_api,
-    #                                         'host_allocation_create')
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = ['host3']
-    #     host_get = self.patch(self.db_api, 'host_get')
-    #     host_get.return_value = {'hypervisor_hostname': 'host3_hostname'}
-    #     add_computehost = self.patch(
-    #         self.nova.ReservationPool, 'add_computehost')
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     network_allocation_destroy = self.patch(self.db_api,
+    #                                          'network_allocation_destroy')
+    #     network_allocation_create = self.patch(self.db_api,
+    #                                         'network_allocation_create')
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = ['network3']
+    #     network_get = self.patch(self.db_api, 'network_get')
+    #     network_get.return_value = {'hypervisor_networkname': 'network3_networkname'}
+    #     add_computenetwork = self.patch(
+    #         self.nova.ReservationPool, 'add_computenetwork')
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_called_with(
+    #     network_reservation_get.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_hosts.assert_called_with(
+    #     matching_networks.assert_called_with(
     #         '["=", "$memory_mb", "16384"]',
     #         '',
     #         '0-1',
     #         datetime.datetime(2017, 7, 12, 20, 00),
     #         datetime.datetime(2017, 7, 12, 21, 00)
     #     )
-    #     host_allocation_destroy.assert_not_called()
-    #     host_allocation_create.assert_called_with(
+    #     network_allocation_destroy.assert_not_called()
+    #     network_allocation_create.assert_called_with(
     #         {
-    #             'compute_host_id': 'host3',
+    #             'compute_network_id': 'network3',
     #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
     #         }
     #     )
-    #     add_computehost.assert_called_with(
-    #         1, 'host3_hostname')
-    #     host_reservation_update.assert_called_with(
+    #     add_computenetwork.assert_called_with(
+    #         1, 'network3_networkname')
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         {'count_range': '1-3'}
     #     )
@@ -992,49 +975,49 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '1-2',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'}
     #     ]
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = []
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = []
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_called_with(
+    #     network_reservation_get.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_hosts.assert_called_with(
+    #     matching_networks.assert_called_with(
     #         '["=", "$memory_mb", "16384"]',
     #         '',
     #         '0-1',
     #         datetime.datetime(2017, 7, 12, 20, 00),
     #         datetime.datetime(2017, 7, 12, 21, 00)
     #     )
-    #     host_reservation_update.assert_called_with(
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         {'count_range': '1-3'}
     #     )
@@ -1056,44 +1039,44 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '1-2',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         },
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_host_id': 'host2'
+    #             'compute_network_id': 'network2'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [
-    #         {'id': 'host1'},
-    #         {'id': 'host2'}
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [
+    #         {'id': 'network1'},
+    #         {'id': 'network2'}
     #     ]
-    #     host_allocation_destroy = self.patch(self.db_api,
-    #                                          'host_allocation_destroy')
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     network_allocation_destroy = self.patch(self.db_api,
+    #                                          'network_allocation_destroy')
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_called_with(
+    #     network_reservation_get.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     host_allocation_destroy.assert_called_with(
+    #     network_allocation_destroy.assert_called_with(
     #         'dd305477-4df8-4547-87f6-69069ee546a6')
-    #     host_reservation_update.assert_called_with(
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         {'count_range': '1-1'}
     #     )
@@ -1102,7 +1085,7 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #     values = {
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'hypervisor_properties': '["=", "$memory_mb", "32768"]',
+    #         'network_properties': '["=", "$memory_mb", "32768"]',
     #     }
     #     reservation_get = self.patch(self.db_api, 'reservation_get')
     #     reservation_get.return_value = {
@@ -1115,60 +1098,60 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '1-1',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = [{'id': 'host2'}]
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = ['host2']
-    #     host_allocation_create = self.patch(self.db_api,
-    #                                         'host_allocation_create')
-    #     host_allocation_destroy = self.patch(self.db_api,
-    #                                          'host_allocation_destroy')
-    #     host_reservation_update = self.patch(self.db_api,
-    #                                          'host_reservation_update')
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = [{'id': 'network2'}]
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = ['network2']
+    #     network_allocation_create = self.patch(self.db_api,
+    #                                         'network_allocation_create')
+    #     network_allocation_destroy = self.patch(self.db_api,
+    #                                          'network_allocation_destroy')
+    #     network_reservation_update = self.patch(self.db_api,
+    #                                          'network_reservation_update')
     #
     #     self.fake_network_plugin.update_reservation(
     #         '706eb3bc-07ed-4383-be93-b32845ece672',
     #         values)
-    #     host_reservation_get.assert_called_with(
+    #     network_reservation_get.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_hosts.assert_called_with(
+    #     matching_networks.assert_called_with(
     #         '["=", "$memory_mb", "32768"]',
     #         '',
     #         '1-1',
     #         datetime.datetime(2017, 7, 12, 20, 00),
     #         datetime.datetime(2017, 7, 12, 21, 00)
     #     )
-    #     host_allocation_create.assert_called_with(
+    #     network_allocation_create.assert_called_with(
     #         {
-    #             'compute_host_id': 'host2',
+    #             'compute_network_id': 'network2',
     #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
     #         }
     #     )
-    #     host_allocation_destroy.assert_called_with(
+    #     network_allocation_destroy.assert_called_with(
     #         'dd305477-4df8-4547-87f6-69069ee546a6'
     #     )
-    #     host_reservation_update.assert_called_with(
+    #     network_reservation_update.assert_called_with(
     #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'hypervisor_properties': '["=", "$memory_mb", "32768"]'}
+    #         {'network_properties': '["=", "$memory_mb", "32768"]'}
     #     )
     #
-    # def test_update_reservation_no_requested_hosts_available(self):
+    # def test_update_reservation_no_requested_networks_available(self):
     #     values = {
     #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
     #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
@@ -1185,29 +1168,29 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
     #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
     #     }
-    #     host_reservation_get = self.patch(self.db_api, 'host_reservation_get')
-    #     host_reservation_get.return_value = {
+    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
+    #     network_reservation_get.return_value = {
     #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
     #         'count_range': '1-1',
-    #         'hypervisor_properties': '["=", "$memory_mb", "16384"]',
+    #         'network_properties': '["=", "$memory_mb", "16384"]',
     #         'resource_properties': ''
     #     }
-    #     host_allocation_get_all = self.patch(
-    #         self.db_api, 'host_allocation_get_all_by_values')
-    #     host_allocation_get_all.return_value = [
+    #     network_allocation_get_all = self.patch(
+    #         self.db_api, 'network_allocation_get_all_by_values')
+    #     network_allocation_get_all.return_value = [
     #         {
     #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_host_id': 'host1'
+    #             'compute_network_id': 'network1'
     #         }
     #     ]
-    #     host_get_all_by_queries = self.patch(self.db_api,
-    #                                          'host_get_all_by_queries')
-    #     host_get_all_by_queries.return_value = []
-    #     matching_hosts = self.patch(self.fake_network_plugin, '_matching_hosts')
-    #     matching_hosts.return_value = []
+    #     network_get_all_by_queries = self.patch(self.db_api,
+    #                                          'network_get_all_by_queries')
+    #     network_get_all_by_queries.return_value = []
+    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
+    #     matching_networks.return_value = []
     #
     #     self.assertRaises(
-    #         manager_exceptions.NotEnoughHostsAvailable,
+    #         manager_exceptions.NotEnoughnetworksAvailable,
     #         self.fake_network_plugin.update_reservation,
     #         '441c1476-9f8f-4700-9f30-cd9b6fef3509',
     #         values)
@@ -1244,9 +1227,7 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
             'physical_network': 'physnet1',
             'segment_id': 1234
         }
-        neutron = self.patch(self.neutron, 'Client')
-        neutron.return_value = mock.MagicMock()
-        create_network = self.patch(neutron.return_value, 'create_network')
+        create_network = self.patch(self.neutron_client, 'create_network')
         create_network.return_value = {
             'network': {
                 'id': '69cab064-0e60-4efb-a503-b42dde0fb3f2',
@@ -1302,12 +1283,10 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
             'physical_network': 'physnet1',
             'segment_id': 1234
         }
-        neutron = self.patch(self.neutron, 'Client')
-        neutron.return_value = mock.MagicMock()
 
         def fake_create_network(*args, **kwargs):
             raise manager_exceptions.NetworkCreationFailed
-        create_network = self.patch(neutron.return_value, 'create_network')
+        create_network = self.patch(self.neutron_client, 'create_network')
         create_network.side_effect = fake_create_network
 
         self.assertRaises(manager_exceptions.NetworkCreationFailed,
@@ -1348,9 +1327,7 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
         network_allocation_destroy = self.patch(
             self.db_api,
             'network_allocation_destroy')
-        neutron = self.patch(self.neutron, 'Client')
-        neutron.return_value = mock.MagicMock()
-        delete_network = self.patch(neutron.return_value, 'delete_network')
+        delete_network = self.patch(self.neutron_client, 'delete_network')
         delete_network.return_value = None
 
         self.fake_network_plugin.on_end(
@@ -1396,17 +1373,10 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
         network_allocation_destroy = self.patch(
             self.db_api,
             'network_allocation_destroy')
-        neutron = self.patch(self.neutron, 'Client')
-        neutron.return_value = mock.MagicMock()
-        delete_network = self.patch(neutron.return_value, 'delete_network')
-        delete_network.return_value = None
-
-        neutron = self.patch(self.neutron, 'Client')
-        neutron.return_value = mock.MagicMock()
 
         def fake_delete_network(*args, **kwargs):
             raise manager_exceptions.NetworkDeletionFailed
-        delete_network = self.patch(neutron.return_value, 'delete_network')
+        delete_network = self.patch(self.neutron_client, 'delete_network')
         delete_network.side_effect = fake_delete_network
 
         self.assertRaises(manager_exceptions.NetworkDeletionFailed,

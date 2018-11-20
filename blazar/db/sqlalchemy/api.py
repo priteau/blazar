@@ -1157,3 +1157,94 @@ def unreservable_network_get_all_by_queries(queries):
     # TODO(hiro-kobayashi): support the expression 'reservable == False'
     queries.append('reservable == 0')
     return network_get_all_by_queries(queries)
+
+
+# NetworkSegmentExtraCapability
+
+def _network_extra_capability_get(session, network_extra_capability_id):
+    query = model_query(models.NetworkSegmentExtraCapability, session)
+    return query.filter_by(id=network_extra_capability_id).first()
+
+
+def network_extra_capability_get(network_extra_capability_id):
+    return _network_extra_capability_get(get_session(),
+                                         network_extra_capability_id)
+
+
+def _network_extra_capability_get_all_per_network(session, network_id):
+    query = model_query(models.NetworkSegmentExtraCapability, session)
+    return query.filter_by(NetworkSegment_id=network_id)
+
+
+def network_extra_capability_get_all_per_network(network_id):
+    return _network_extra_capability_get_all_per_network(get_session(),
+                                                         network_id).all()
+
+
+def network_extra_capability_create(values):
+    values = values.copy()
+    network_extra_capability = models.NetworkSegmentExtraCapability()
+    network_extra_capability.update(values)
+
+    session = get_session()
+    with session.begin():
+        try:
+            network_extra_capability.save(session=session)
+        except common_db_exc.DBDuplicateEntry as e:
+            # raise exception about duplicated columns (e.columns)
+            raise db_exc.BlazarDBDuplicateEntry(
+                model=network_extra_capability.__class__.__name__,
+                columns=e.columns)
+
+    return network_extra_capability_get(network_extra_capability.id)
+
+
+def network_extra_capability_update(network_extra_capability_id, values):
+    session = get_session()
+
+    with session.begin():
+        network_extra_capability = (
+            _network_extra_capability_get(session,
+                                          network_extra_capability_id))
+        network_extra_capability.update(values)
+        network_extra_capability.save(session=session)
+
+    return network_extra_capability_get(network_extra_capability_id)
+
+
+def network_extra_capability_destroy(network_extra_capability_id):
+    session = get_session()
+    with session.begin():
+        network_extra_capability = (
+            _network_extra_capability_get(session,
+                                          network_extra_capability_id))
+
+        if not network_extra_capability:
+            # raise not found error
+            raise db_exc.BlazarDBNotFound(
+                id=network_extra_capability_id,
+                model='NetworkSegmentExtraCapability')
+
+        session.delete(network_extra_capability)
+
+
+def network_extra_capability_get_all_per_name(network_id, capability_name):
+    session = get_session()
+
+    with session.begin():
+        query = _network_extra_capability_get_all_per_network(
+            session, network_id)
+        return query.filter_by(capability_name=capability_name).all()
+
+
+def network_extra_capability_get_latest_per_name(network_id, capability_name):
+    session = get_session()
+
+    with session.begin():
+        query = _network_extra_capability_get_all_per_network(
+            session, network_id)
+        return (
+            query.filter_by(capability_name=capability_name)
+                 .order_by(
+                     models.NetworkSegmentExtraCapability.created_at.desc())
+                 .first())

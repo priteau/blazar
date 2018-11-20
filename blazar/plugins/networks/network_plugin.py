@@ -16,13 +16,10 @@
 
 import datetime
 from random import shuffle
-import shlex
-import subprocess
 
 from keystoneauth1 import identity
 from keystoneauth1 import session
 from neutronclient.v2_0 import client as neutron_client
-from novaclient import exceptions as nova_exceptions
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import strutils
@@ -115,7 +112,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         lease = db_api.lease_get(reservation['lease_id'])
 
         if (not [x for x in values.keys() if x in ['min', 'max',
-                                                   'hypervisor_properties',
+                                                   'network_properties',
                                                    'resource_properties']]
                 and values['start_date'] >= lease['start_date']
                 and values['end_date'] <= lease['end_date']):
@@ -149,9 +146,9 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 'max', network_reservation['count_range'].split('-')[1])
             )
             updates['count_range'] = count_range
-        if 'hypervisor_properties' in values:
-            updates['hypervisor_properties'] = values.get(
-                'hypervisor_properties')
+        if 'network_properties' in values:
+            updates['network_properties'] = values.get(
+                'network_properties')
         if 'resource_properties' in values:
             updates['resource_properties'] = values.get(
                 'resource_properties')
@@ -322,7 +319,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         # Allocate an alternative network.
         start_date = max(datetime.datetime.utcnow(), lease['start_date'])
         new_networkids = self._matching_networks(
-            reservation['hypervisor_properties'],
+            reservation['network_properties'],
             reservation['resource_properties'],
             '1-1', start_date, lease['end_date']
         )
@@ -533,9 +530,9 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             'max', network_reservation['count_range'].split('-')[1]), 'max')
         if min_networks < 0 or max_networks < min_networks:
             raise manager_ex.InvalidRange()
-        hypervisor_properties = values.get(
-            'hypervisor_properties',
-            network_reservation['hypervisor_properties'])
+        network_properties = values.get(
+            'network_properties',
+            network_reservation['network_properties'])
         resource_properties = values.get(
             'resource_properties',
             network_reservation['resource_properties'])
@@ -543,7 +540,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             reservation_id=reservation_id)
 
         allocs_to_remove = self._allocations_to_remove(
-            dates_before, dates_after, max_networks, hypervisor_properties,
+            dates_before, dates_after, max_networks, network_properties,
             resource_properties, allocs)
 
         if (allocs_to_remove and
@@ -557,7 +554,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 if (min_networks - kept_networks) > 0 else 0
             max_networks = max_networks - kept_networks
             network_ids_to_add = self._matching_networks(
-                hypervisor_properties, resource_properties,
+                network_properties, resource_properties,
                 str(min_networks) + '-' + str(max_networks),
                 dates_after['start_date'], dates_after['end_date'])
 
@@ -589,13 +586,13 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             db_api.network_allocation_destroy(allocation['id'])
 
     def _allocations_to_remove(self, dates_before, dates_after, max_networks,
-                               hypervisor_properties, resource_properties,
+                               network_properties, resource_properties,
                                allocs):
         """Finds candidate compute network allocations to remove"""
         allocs_to_remove = []
         requested_network_ids = [network['id'] for network in
                               self._filter_networks_by_properties(
-                                  hypervisor_properties, resource_properties)]
+                                  network_properties, resource_properties)]
 
         for alloc in allocs:
             if alloc['compute_network_id'] not in requested_network_ids:
@@ -631,11 +628,11 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         return allocs_to_remove
 
-    def _filter_networks_by_properties(self, hypervisor_properties,
+    def _filter_networks_by_properties(self, network_properties,
                                     resource_properties):
         filter = []
-        if hypervisor_properties:
-            filter += plugins_utils.convert_requirements(hypervisor_properties)
+        if network_properties:
+            filter += plugins_utils.convert_requirements(network_properties)
         if resource_properties:
             filter += plugins_utils.convert_requirements(resource_properties)
         if filter:
