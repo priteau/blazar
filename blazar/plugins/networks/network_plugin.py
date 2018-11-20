@@ -170,10 +170,10 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         for allocation in db_api.network_allocation_get_all_by_values(
                 reservation_id=reservation_id):
-            # network_segment = db_api.network_get(allocation['network_id'])
-            # network_type = network_segment['network_type']
-            # physical_network = network_segment['physical_network']
-            # segment_id = network_segment['segment_id']
+            network_segment = db_api.network_get(allocation['network_id'])
+            network_type = network_segment['network_type']
+            physical_network = network_segment['physical_network']
+            segment_id = network_segment['segment_id']
             auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
                                           CONF.os_auth_host,
                                           CONF.os_auth_port,
@@ -182,8 +182,8 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 auth_url=auth_url,
                 username=CONF.os_admin_username,
                 password=CONF.os_admin_password,
-                project_domain_id=CONF.os_admin_project_domain_name,
-                user_domain_id=CONF.os_admin_user_domain_name,
+                project_domain_name=CONF.os_admin_project_domain_name,
+                user_domain_name=CONF.os_admin_user_domain_name,
                 trust_id=lease['trust_id'])
             self.sess = session.Session(auth=self.auth)
             self.neutron = neutron_client.Client(
@@ -191,17 +191,26 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             network_body = {
                 "network": {
                     "name": network_name,
-                    # TODO Add provider network params
+                    "provider:network_type": network_type,
+                    "provider:segmentation_id": segment_id,
                 }
             }
-            try:
-                self.neutron.create_network(body=network_body)
-            except Exception:
-                raise manager_ex.NetworkCreationFailed(name=network_name,
-                                                       id=reservation_id)
+            if physical_network:
+                network_body['network']['provider:physical_network'] = physical_network
 
-    def delete_neutron_network(self, network_id, reservation_id=None,
-                               trust_id=None):
+            try:
+                netw = self.neutron.create_network(body=network_body)
+                net_dict = netw['network']
+                network_id = net_dict['id']
+                db_api.network_reservation_update(network_reservation['id'],
+                                                  {'network_id': network_id})
+            except Exception:
+                LOG.error("Failed to create Neutron network %s", network_name)
+                raise
+                #raise manager_ex.NetworkCreationFailed(name=network_name,
+                #                                       id=reservation_id)
+
+    def delete_neutron_network(self, network_id, reservation_id, trust_id):
         auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
                                       CONF.os_auth_host,
                                       CONF.os_auth_port,
@@ -210,8 +219,8 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             auth_url=auth_url,
             username=CONF.os_admin_username,
             password=CONF.os_admin_password,
-            project_domain_id=CONF.os_admin_project_domain_name,
-            user_domain_id=CONF.os_admin_user_domain_name,
+            project_domain_name=CONF.os_admin_project_domain_name,
+            user_domain_name=CONF.os_admin_user_domain_name,
             trust_id=trust_id)
         self.sess = session.Session(auth=self.auth)
         self.neutron = neutron_client.Client(
@@ -233,6 +242,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         # We need the lease to get to the trust_id
         reservation = db_api.reservation_get(reservation_id)
         lease = db_api.lease_get(reservation['lease_id'])
+        trust_id = lease['trust_id']
         db_api.network_reservation_update(network_reservation['id'],
                                           {'status': 'completed'})
         allocations = db_api.network_allocation_get_all_by_values(
@@ -241,7 +251,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             db_api.network_allocation_destroy(allocation['id'])
         network_id = network_reservation['network_id']
 
-        self.delete_neutron_network(network_id=network_id)
+        self.delete_neutron_network(network_id, reservation_id, trust_id)
 
         reservation = db_api.reservation_get(
             network_reservation['reservation_id'])

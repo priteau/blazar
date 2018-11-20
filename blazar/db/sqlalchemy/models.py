@@ -269,7 +269,7 @@ class NetworkSegment(mb.BlazarBase):
         return super(NetworkSegment, self).to_dict()
 
 
-class NetworkReservation(mb.BlazarBase):
+class NetworkReservation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
     """Description
 
     Specifies resources asked by reservation from
@@ -284,12 +284,13 @@ class NetworkReservation(mb.BlazarBase):
     hypervisor_properties = sa.Column(MediumText())
     before_end = sa.Column(sa.String(36))
     network_name = sa.Column(sa.String(255))
+    network_id = sa.Column(sa.String(255))
 
     def to_dict(self):
         return super(NetworkReservation, self).to_dict()
 
 
-class NetworkAllocation(mb.BlazarBase):
+class NetworkAllocation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
     """Mapping between NetworkSegment, NetworkReservation and Reservation."""
 
     __tablename__ = 'network_allocations'
