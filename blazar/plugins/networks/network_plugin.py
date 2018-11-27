@@ -17,6 +17,7 @@
 import datetime
 from random import shuffle
 
+from ironicclient import client as ironic_client
 from keystoneauth1 import identity
 from keystoneauth1 import session
 from neutronclient.v2_0 import client as neutron_client
@@ -131,6 +132,23 @@ class NetworkPlugin(base.BasePlugin):
             db_api.network_reservation_update(
                 network_reservation['id'], updates)
 
+    def ironic(self):
+        auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
+                                      CONF.os_auth_host,
+                                      CONF.os_auth_port,
+                                      CONF.os_auth_prefix)
+        auth = identity.Password(
+            auth_url=auth_url,
+            username=CONF.os_admin_username,
+            password=CONF.os_admin_password,
+            project_domain_name=CONF.os_admin_project_domain_name,
+            user_domain_name=CONF.os_admin_user_domain_name)
+        sess = session.Session(auth=auth)
+        return ironic_client.get_client(1,
+                                        session=sess,
+                                        os_ironic_api_version='latest',
+                                        region_name=CONF.os_region_name)
+
     def neutron(self, trust_id=None):
         auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
                                       CONF.os_auth_host,
@@ -186,10 +204,59 @@ class NetworkPlugin(base.BasePlugin):
                 raise manager_ex.NetworkCreationFailed(name=network_name,
                                                        id=reservation_id)
 
+    def delete_port(self, neutron, ironic, port):
+        if port['binding:vnic_type'] == 'baremetal':
+            node = port['binding:host_id']
+            ironic.node.vif_detach(node, port['id'])
+        neutron.delete_port(port['id'])
+
+    def delete_subnet(self, neutron, subnet_id):
+        neutron.delete_subnet(subnet_id)
+
+    def delete_router(self, neutron, router_id):
+        neutron.remove_gateway_router(router_id)
+        neutron.delete_router(router_id)
+
     def delete_neutron_network(self, network_id, reservation_id, trust_id):
         neutron = self.neutron(trust_id=trust_id)
+
         try:
-            neutron.delete_network(network_id)
+            networks = neutron.list_networks(id=network_id)
+            ports = neutron.list_ports(network_id=network_id)
+            instance_ports = neutron.list_ports(
+                device_owner='compute:nova', network_id=network_id)
+            for instance_port in instance_ports['ports']:
+                self.delete_port(neutron, ironic, instance_port)
+
+            router_ids = [port['device_id'] for port in ports['ports'] if port['device_owner'] == 'network:router_interface']
+            print('Routers:')
+            for router_id in router_ids:
+                router_ports = neutron.list_ports(device_id=router_id)
+
+                # Remove static routes
+                neutron.update_router(
+                    router_id, body={'router': {'routes': []}})
+
+                # Remove subnets
+                subnets = set()
+                for router_port in router_ports['ports']:
+                    if router_port['device_owner'] != 'network:router_gateway':
+                        for fixed_ip in router_port['fixed_ips']:
+                            subnets.update([fixed_ip['subnet_id']])
+                for subnet_id in subnets:
+                    body = {}
+                    body['subnet_id'] = subnet_id
+                    neutron.remove_interface_router(router_id, body=body)
+
+                # Delete external gateway and router
+                self.delete_router(neutron, router_id)
+
+            subnets = neutron.list_subnets(network_id=network_id)
+            for subnet in subnets['subnets']:
+                self.delete_subnet(neutron, subnet['id'])
+
+            for network in networks['networks']:
+                neutron.delete_network(network['id'])
         except Exception:
             raise manager_ex.NetworkDeletionFailed(
                 network_id=network_id, reservation_id=reservation_id)
