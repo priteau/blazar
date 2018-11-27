@@ -264,13 +264,16 @@ class NetworkPlugin(base.BasePlugin):
         network_type = values.get('network_type')
         physical_network = values.get('physical_network')
         segment_id = values.get('segment_id')
-        if network_type == 'vlan':
-            try:
-                segment_id = int(segment_id)
-            except ValueError:
-                raise manager_ex.MalformedParameter(param=segment_id)
-            if segment_id < 1 or segment_id > 4094:
-                raise manager_ex.MalformedParameter(param=segment_id)
+        if network_type != 'vlan':
+            raise manager_ex.MalformedParameter(param=network_type)
+
+        # Check that VLAN segmentation ID is valid
+        try:
+            segment_id = int(segment_id)
+        except ValueError:
+            raise manager_ex.MalformedParameter(param=segment_id)
+        if segment_id < 1 or segment_id > 4094:
+            raise manager_ex.MalformedParameter(param=segment_id)
 
         network_values = {
             'network_type': network_type,
