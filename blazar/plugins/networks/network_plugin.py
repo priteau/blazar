@@ -22,7 +22,6 @@ from keystoneauth1 import session
 from neutronclient.v2_0 import client as neutron_client
 from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_utils import strutils
 
 from blazar.db import api as db_api
 from blazar.db import exceptions as db_ex
@@ -129,7 +128,25 @@ class NetworkPlugin(base.BasePlugin):
             updates['resource_properties'] = values.get(
                 'resource_properties')
         if updates:
-            db_api.network_reservation_update(network_reservation['id'], updates)
+            db_api.network_reservation_update(
+                network_reservation['id'], updates)
+
+    def neutron_with_trust(self, trust_id):
+        auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
+                                      CONF.os_auth_host,
+                                      CONF.os_auth_port,
+                                      CONF.os_auth_prefix)
+        self.auth = identity.Password(
+            auth_url=auth_url,
+            username=CONF.os_admin_username,
+            password=CONF.os_admin_password,
+            project_domain_name=CONF.os_admin_project_domain_name,
+            user_domain_name=CONF.os_admin_user_domain_name,
+            trust_id=trust_id)
+        self.sess = session.Session(auth=self.auth)
+        self.neutron = neutron_client.Client(
+            session=self.sess, region_name=CONF.os_region_name)
+        return self.neutron
 
     def on_start(self, resource_id):
         """Creates a Neutron network using the allocated segment."""
@@ -147,20 +164,7 @@ class NetworkPlugin(base.BasePlugin):
             network_type = network_segment['network_type']
             physical_network = network_segment['physical_network']
             segment_id = network_segment['segment_id']
-            auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
-                                          CONF.os_auth_host,
-                                          CONF.os_auth_port,
-                                          CONF.os_auth_prefix)
-            self.auth = identity.Password(
-                auth_url=auth_url,
-                username=CONF.os_admin_username,
-                password=CONF.os_admin_password,
-                project_domain_name=CONF.os_admin_project_domain_name,
-                user_domain_name=CONF.os_admin_user_domain_name,
-                trust_id=lease['trust_id'])
-            self.sess = session.Session(auth=self.auth)
-            self.neutron = neutron_client.Client(
-                session=self.sess, region_name=CONF.os_region_name)
+            self.neutron = self.neutron_with_trust(lease['trust_id'])
             network_body = {
                 "network": {
                     "name": network_name,
@@ -169,7 +173,8 @@ class NetworkPlugin(base.BasePlugin):
                 }
             }
             if physical_network:
-                network_body['network']['provider:physical_network'] = physical_network
+                network_body['network']['provider:physical_network'] = (
+                    physical_network)
 
             try:
                 netw = self.neutron.create_network(body=network_body)
@@ -182,20 +187,7 @@ class NetworkPlugin(base.BasePlugin):
                                                        id=reservation_id)
 
     def delete_neutron_network(self, network_id, reservation_id, trust_id):
-        auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
-                                      CONF.os_auth_host,
-                                      CONF.os_auth_port,
-                                      CONF.os_auth_prefix)
-        self.auth = identity.Password(
-            auth_url=auth_url,
-            username=CONF.os_admin_username,
-            password=CONF.os_admin_password,
-            project_domain_name=CONF.os_admin_project_domain_name,
-            user_domain_name=CONF.os_admin_user_domain_name,
-            trust_id=trust_id)
-        self.sess = session.Session(auth=self.auth)
-        self.neutron = neutron_client.Client(
-            session=self.sess, region_name=CONF.os_region_name)
+        self.neutron = self.neutron_with_trust(trust_id)
         try:
             self.neutron.delete_network(network_id)
         except Exception:
@@ -233,88 +225,6 @@ class NetworkPlugin(base.BasePlugin):
         except manager_ex.RedisConnectionError:
             pass
 
-    def heal_reservations(self, failed_resources, interval_begin,
-                          interval_end):
-        """Heal reservations which suffer from resource failures.
-
-        :param: failed_resources: a list of failed networks.
-        :param: interval_begin: start date of the period to heal.
-        :param: interval_end: end date of the period to heal.
-        :return: a dictionary of {reservation id: flags to update}
-                 e.g. {'de27786d-bd96-46bb-8363-19c13b2c6657':
-                       {'missing_resources': True}}
-        """
-        reservation_flags = {}
-
-        network_ids = [h['id'] for h in failed_resources]
-        reservations = db_utils.get_reservations_by_network_ids(network_ids,
-                                                                interval_begin,
-                                                                interval_end)
-
-        for reservation in reservations:
-            if reservation['resource_type'] != plugin.RESOURCE_TYPE:
-                continue
-
-            for allocation in [alloc for alloc
-                               in reservation['network_allocations']
-                               if alloc['network_id'] in network_ids]:
-                if self._reallocate(allocation):
-                    if reservation['status'] == status.reservation.ACTIVE:
-                        if reservation['id'] not in reservation_flags:
-                            reservation_flags[reservation['id']] = {}
-                        reservation_flags[reservation['id']].update(
-                            {'resources_changed': True})
-                else:
-                    if reservation['id'] not in reservation_flags:
-                        reservation_flags[reservation['id']] = {}
-                    reservation_flags[reservation['id']].update(
-                        {'missing_resources': True})
-
-        return reservation_flags
-
-    def _reallocate(self, allocation):
-        """Allocate an alternative network.
-
-        :param: allocation: allocation to change.
-        :return: True if an alternative network was successfully allocated.
-        """
-        reservation = db_api.reservation_get(allocation['reservation_id'])
-        h_reservation = db_api.network_reservation_get(
-            reservation['resource_id'])
-        lease = db_api.lease_get(reservation['lease_id'])
-
-        # Remove the old network from the aggregate.
-        if reservation['status'] == status.reservation.ACTIVE:
-            network = db_api.network_get(allocation['network_id'])
-            pool.remove_network(h_reservation['aggregate_id'],
-                                network['hypervisor_networkname'])
-
-        # Allocate an alternative network.
-        start_date = max(datetime.datetime.utcnow(), lease['start_date'])
-        new_networkids = self._matching_networks(
-            reservation['network_properties'],
-            reservation['resource_properties'],
-            '1-1', start_date, lease['end_date']
-        )
-        if not new_networkids:
-            db_api.network_allocation_destroy(allocation['id'])
-            LOG.warn('Could not find alternative network for reservation %s '
-                     '(lease: %s).', reservation['id'], lease['name'])
-            return False
-        else:
-            new_networkid = new_networkids.pop()
-            db_api.network_allocation_update(allocation['id'],
-                                             {'network_id': new_networkid})
-            LOG.warn('Resource changed for reservation %s (lease: %s).',
-                     reservation['id'], lease['name'])
-            if reservation['status'] == status.reservation.ACTIVE:
-                # Add the alternative network into the aggregate.
-                new_network = db_api.network_get(new_networkid)
-                pool.add_network(h_reservation['aggregate_id'],
-                                 new_network['hypervisor_networkname'])
-
-            return True
-
     def _get_extra_capabilities(self, network_id):
         extra_capabilities = {}
         raw_extra_capabilities = (
@@ -349,6 +259,7 @@ class NetworkPlugin(base.BasePlugin):
             raise manager_ex.MissingParameter(param=','.join(missing_attr))
 
     def create_network(self, values):
+        # TODO(priteau): check that no network is using this segmentation_id
         self.validate_network_param(values)
         network_type = values.get('network_type')
         physical_network = values.get('physical_network')
@@ -499,7 +410,6 @@ class NetworkPlugin(base.BasePlugin):
                 msg='The network is reserved.'
             )
 
-        # TODO(priteau): check that no network is using this segmentation_id
 #        inventory = nova.NovaInventory()
 #        servers = inventory.get_servers_per_network(
 #            network['hypervisor_networkname'])
@@ -555,16 +465,6 @@ class NetworkPlugin(base.BasePlugin):
             return all_network_ids[:1]
         else:
             return []
-
-    def _convert_int_param(self, param, name):
-        """Checks that the parameter is present and can be converted to int."""
-        if param is None:
-            raise manager_ex.MissingParameter(param=name)
-        if strutils.is_int_like(param):
-            param = int(param)
-        else:
-            raise manager_ex.MalformedParameter(param=name)
-        return param
 
     def _check_params(self, values):
         if 'resource_properties' not in values:
