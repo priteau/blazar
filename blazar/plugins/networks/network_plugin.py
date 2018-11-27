@@ -131,22 +131,22 @@ class NetworkPlugin(base.BasePlugin):
             db_api.network_reservation_update(
                 network_reservation['id'], updates)
 
-    def neutron_with_trust(self, trust_id):
+    def neutron(self, trust_id=None):
         auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
                                       CONF.os_auth_host,
                                       CONF.os_auth_port,
                                       CONF.os_auth_prefix)
-        self.auth = identity.Password(
+        auth = identity.Password(
             auth_url=auth_url,
             username=CONF.os_admin_username,
             password=CONF.os_admin_password,
             project_domain_name=CONF.os_admin_project_domain_name,
             user_domain_name=CONF.os_admin_user_domain_name,
             trust_id=trust_id)
-        self.sess = session.Session(auth=self.auth)
-        self.neutron = neutron_client.Client(
-            session=self.sess, region_name=CONF.os_region_name)
-        return self.neutron
+        sess = session.Session(auth=auth)
+        neutron = neutron_client.Client(
+            session=sess, region_name=CONF.os_region_name)
+        return neutron
 
     def on_start(self, resource_id):
         """Creates a Neutron network using the allocated segment."""
@@ -164,7 +164,7 @@ class NetworkPlugin(base.BasePlugin):
             network_type = network_segment['network_type']
             physical_network = network_segment['physical_network']
             segment_id = network_segment['segment_id']
-            self.neutron = self.neutron_with_trust(lease['trust_id'])
+            neutron = self.neutron(trust_id=lease['trust_id'])
             network_body = {
                 "network": {
                     "name": network_name,
@@ -177,9 +177,9 @@ class NetworkPlugin(base.BasePlugin):
                     physical_network)
 
             try:
-                netw = self.neutron.create_network(body=network_body)
-                net_dict = netw['network']
-                network_id = net_dict['id']
+                network = neutron.create_network(body=network_body)
+                network_dict = network['network']
+                network_id = network_dict['id']
                 db_api.network_reservation_update(network_reservation['id'],
                                                   {'network_id': network_id})
             except Exception:
@@ -187,9 +187,9 @@ class NetworkPlugin(base.BasePlugin):
                                                        id=reservation_id)
 
     def delete_neutron_network(self, network_id, reservation_id, trust_id):
-        self.neutron = self.neutron_with_trust(trust_id)
+        neutron = self.neutron(trust_id=trust_id)
         try:
-            self.neutron.delete_network(network_id)
+            neutron.delete_network(network_id)
         except Exception:
             raise manager_ex.NetworkDeletionFailed(
                 network_id=network_id, reservation_id=reservation_id)
@@ -205,7 +205,6 @@ class NetworkPlugin(base.BasePlugin):
         # We need the lease to get to the trust_id
         reservation = db_api.reservation_get(reservation_id)
         lease = db_api.lease_get(reservation['lease_id'])
-        trust_id = lease['trust_id']
         db_api.network_reservation_update(network_reservation['id'],
                                           {'status': 'completed'})
         allocations = db_api.network_allocation_get_all_by_values(
@@ -214,7 +213,8 @@ class NetworkPlugin(base.BasePlugin):
             db_api.network_allocation_destroy(allocation['id'])
         network_id = network_reservation['network_id']
 
-        self.delete_neutron_network(network_id, reservation_id, trust_id)
+        self.delete_neutron_network(
+            network_id, reservation_id, lease['trust_id'])
 
         reservation = db_api.reservation_get(
             network_reservation['reservation_id'])
