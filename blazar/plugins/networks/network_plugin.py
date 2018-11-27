@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Author: François Rossigneux <francois.rossigneux@inria.fr>
+# Author: Pierre Riteau <pierre@stackhpc.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -31,39 +31,23 @@ from blazar.manager import exceptions as manager_ex
 from blazar.plugins import base
 from blazar.plugins import networks as plugin
 from blazar import status
-from blazar.utils.openstack import nova
 from blazar.utils import plugins as plugins_utils
 
-plugin_opts = [
-    cfg.StrOpt('before_end',
-               default='',
-               help='Actions which we will be taken before the end of '
-                    'the lease'),
-]
-
 CONF = cfg.CONF
-CONF.register_opts(plugin_opts, group=plugin.RESOURCE_TYPE)
 LOG = logging.getLogger(__name__)
 
 
 before_end_options = ['', 'snapshot', 'default', 'email']
 
 
-class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
+class NetworkPlugin(base.BasePlugin):
     """Plugin for physical network resource."""
     resource_type = plugin.RESOURCE_TYPE
-    title = 'Physical Network Plugin'
-    description = 'This plugin starts and shutdowns the networks.'
-    freepool_name = CONF.nova.aggregate_freepool_name
-    pool = None
+    title = 'Network Plugin'
+    description = 'This plugin creates and deletes networks.'
 
     def __init__(self):
-        super(PhysicalNetworkPlugin, self).__init__(
-            username=CONF.os_admin_username,
-            password=CONF.os_admin_password,
-            user_domain_name=CONF.os_admin_user_domain_name,
-            project_name=CONF.os_admin_project_name,
-            project_domain_name=CONF.os_admin_project_domain_name)
+        super(NetworkPlugin, self).__init__()
         self.usage_enforcer = None
 
     def set_usage_enforcer(self, usage_enforcer):
@@ -138,13 +122,6 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                                  values, lease)
 
         updates = {}
-        if 'min' in values or 'max' in values:
-            count_range = str(values.get(
-                'min', network_reservation['count_range'].split('-')[0])
-            ) + '-' + str(values.get(
-                'max', network_reservation['count_range'].split('-')[1])
-            )
-            updates['count_range'] = count_range
         if 'network_properties' in values:
             updates['network_properties'] = values.get(
                 'network_properties')
@@ -201,10 +178,8 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 db_api.network_reservation_update(network_reservation['id'],
                                                   {'network_id': network_id})
             except Exception:
-                LOG.error("Failed to create Neutron network %s", network_name)
-                raise
-                #raise manager_ex.NetworkCreationFailed(name=network_name,
-                #                                       id=reservation_id)
+                raise manager_ex.NetworkCreationFailed(name=network_name,
+                                                       id=reservation_id)
 
     def delete_neutron_network(self, network_id, reservation_id, trust_id):
         auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
@@ -273,15 +248,15 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         network_ids = [h['id'] for h in failed_resources]
         reservations = db_utils.get_reservations_by_network_ids(network_ids,
-                                                             interval_begin,
-                                                             interval_end)
+                                                                interval_begin,
+                                                                interval_end)
 
         for reservation in reservations:
             if reservation['resource_type'] != plugin.RESOURCE_TYPE:
                 continue
 
             for allocation in [alloc for alloc
-                               in reservation['computenetwork_allocations']
+                               in reservation['network_allocations']
                                if alloc['network_id'] in network_ids]:
                 if self._reallocate(allocation):
                     if reservation['status'] == status.reservation.ACTIVE:
@@ -307,13 +282,12 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         h_reservation = db_api.network_reservation_get(
             reservation['resource_id'])
         lease = db_api.lease_get(reservation['lease_id'])
-        pool = nova.ReservationPool()
 
         # Remove the old network from the aggregate.
         if reservation['status'] == status.reservation.ACTIVE:
             network = db_api.network_get(allocation['network_id'])
             pool.remove_network(h_reservation['aggregate_id'],
-                                    network['hypervisor_networkname'])
+                                network['hypervisor_networkname'])
 
         # Allocate an alternative network.
         start_date = max(datetime.datetime.utcnow(), lease['start_date'])
@@ -330,14 +304,14 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         else:
             new_networkid = new_networkids.pop()
             db_api.network_allocation_update(allocation['id'],
-                                          {'network_id': new_networkid})
+                                             {'network_id': new_networkid})
             LOG.warn('Resource changed for reservation %s (lease: %s).',
                      reservation['id'], lease['name'])
             if reservation['status'] == status.reservation.ACTIVE:
                 # Add the alternative network into the aggregate.
                 new_network = db_api.network_get(new_networkid)
                 pool.add_network(h_reservation['aggregate_id'],
-                                     new_network['hypervisor_networkname'])
+                                 new_network['hypervisor_networkname'])
 
             return True
 
@@ -474,7 +448,8 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         for key in updated_keys:
             raw_capability = next(iter(
-                db_api.network_extra_capability_get_all_per_name(network_id, key)))
+                db_api.network_extra_capability_get_all_per_name(
+                    network_id, key)))
             capability = {
                 'capability_name': key,
                 'capability_value': values[key],
@@ -509,7 +484,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             raise manager_ex.CantAddExtraCapability(
                 network=network_id, keys=cant_update_extra_capability)
 
-        LOG.info('Extra capabilities on compute network %s updated with %s',
+        LOG.info('Extra capabilities on network %s updated with %s',
                  network_id, values)
 
     def delete_network(self, network_id):
@@ -524,6 +499,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                 msg='The network is reserved.'
             )
 
+        # TODO(priteau): check that no network is using this segmentation_id
 #        inventory = nova.NovaInventory()
 #        servers = inventory.get_servers_per_network(
 #            network['hypervisor_networkname'])
@@ -711,184 +687,3 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             return db_api.network_get_all_by_queries(filter)
         else:
             return db_api.network_list()
-
-
-class PhysicalHostMonitorPlugin(base.BaseMonitorPlugin,
-                                nova.NovaClientWrapper):
-    """Monitor plugin for physical network resource."""
-
-    # Singleton design pattern
-    _instance = None
-
-    def __new__(cls):
-        if not cls._instance:
-            cls._instance = super(PhysicalHostMonitorPlugin, cls).__new__(cls)
-            cls._instance.healing_handlers = []
-            super(PhysicalHostMonitorPlugin, cls._instance).__init__(
-                username=CONF.os_admin_username,
-                password=CONF.os_admin_password,
-                user_domain_name=CONF.os_admin_user_domain_name,
-                project_name=CONF.os_admin_project_name,
-                project_domain_name=CONF.os_admin_project_domain_name)
-        return cls._instance
-
-    def __init__(self):
-        """Do nothing.
-
-        This class uses the Singleton design pattern and an instance of this
-        class is generated and initialized in __new__().
-        """
-        pass
-
-    def register_healing_handler(self, handler):
-        self.healing_handlers.append(handler)
-
-    def is_notification_enabled(self):
-        """Check if the notification monitor is enabled."""
-        return CONF[plugin.RESOURCE_TYPE].enable_notification_monitor
-
-    def get_notification_event_types(self):
-        """Get event types of notification messages to handle."""
-        return ['service.update']
-
-    def get_notification_topics(self):
-        """Get topics of notification to subscribe to."""
-        return CONF[plugin.RESOURCE_TYPE].notification_topics
-
-    def notification_callback(self, event_type, payload):
-        """Handle a notification message.
-
-        It is used as a callback of a notification-based resource monitor.
-
-        :param event_type: an event type of a notification.
-        :param payload: a payload of a notification.
-        :return: a dictionary of {reservation id: flags to update}
-                 e.g. {'de27786d-bd96-46bb-8363-19c13b2c6657':
-                       {'missing_resources': True}}
-        """
-        LOG.trace('Handling a notification...')
-        reservation_flags = {}
-
-        data = payload.get('nova_object.data', None)
-        if data:
-            if data['disabled'] or data['forced_down']:
-                failed_networks = db_api.reservable_network_get_all_by_queries(
-                    ['hypervisor_networkname == ' + data['network']])
-                if failed_networks:
-                    LOG.warn('%s failed.',
-                             failed_networks[0]['hypervisor_networkname'])
-                    reservation_flags = self._handle_failures(failed_networks)
-            else:
-                recovered_networks = db_api.network_get_all_by_queries(
-                    ['reservable == 0',
-                     'hypervisor_networkname == ' + data['network']])
-                if recovered_networks:
-                    db_api.network_update(recovered_networks[0]['id'],
-                                          {'reservable': True})
-                    LOG.warn('%s recovered.',
-                             recovered_networks[0]['hypervisor_networkname'])
-
-        return reservation_flags
-
-    def is_polling_enabled(self):
-        """Check if the polling monitor is enabled."""
-        return CONF[plugin.RESOURCE_TYPE].enable_polling_monitor
-
-    def get_polling_interval(self):
-        """Get interval of polling."""
-        return CONF[plugin.RESOURCE_TYPE].polling_interval
-
-    def poll(self):
-        """Detect and handle resource failures.
-
-        :return: a dictionary of {reservation id: flags to update}
-                 e.g. {'de27786d-bd96-46bb-8363-19c13b2c6657':
-                 {'missing_resources': True}}
-        """
-        LOG.trace('Poll...')
-        reservation_flags = {}
-
-        failed_networks, recovered_networks = self._poll_resource_failures()
-        if failed_networks:
-            for network in failed_networks:
-                LOG.warn('%s failed.', network['hypervisor_networkname'])
-            reservation_flags = self._handle_failures(failed_networks)
-        if recovered_networks:
-            for network in recovered_networks:
-                db_api.network_update(network['id'], {'reservable': True})
-                LOG.warn('%s recovered.', network['hypervisor_networkname'])
-
-        return reservation_flags
-
-    def _poll_resource_failures(self):
-        """Check health of networks by calling Nova Hypervisors API.
-
-        :return: a list of failed networks, a list of recovered networks.
-        """
-        networks = db_api.network_get_all_by_filters({})
-        reservable_networks = [h for h in networks if h['reservable'] is True]
-        unreservable_networks = [h for h in networks if h['reservable'] is False]
-
-        try:
-            hvs = self.nova.hypervisors.list()
-
-            failed_hv_ids = [str(hv.id) for hv in hvs
-                             if hv.state == 'down' or hv.status == 'disabled']
-            failed_networks = [network for network in reservable_networks
-                            if network['id'] in failed_hv_ids]
-
-            active_hv_ids = [str(hv.id) for hv in hvs
-                             if hv.state == 'up' and hv.status == 'enabled']
-            recovered_networks = [network for network in unreservable_networks
-                               if network['id'] in active_hv_ids]
-        except Exception as e:
-            LOG.exception('Skipping health check. %s', str(e))
-
-        return failed_networks, recovered_networks
-
-    def _handle_failures(self, failed_networks):
-        """Handle resource failures.
-
-        :param: failed_networks: a list of failed networks.
-        :return: a dictionary of {reservation id: flags to update}
-                 e.g. {'de27786d-bd96-46bb-8363-19c13b2c6657':
-                 {'missing_resources': True}}
-        """
-
-        # Update the computenetworks table
-        for network in failed_networks:
-            try:
-                db_api.network_update(network['id'], {'reservable': False})
-            except Exception as e:
-                LOG.exception('Failed to update %s. %s',
-                              network['hypervisor_networkname'], str(e))
-
-        # Heal related reservations
-        return self.heal()
-
-    def get_healing_interval(self):
-        """Get interval of reservation healing in minutes."""
-        return CONF[plugin.RESOURCE_TYPE].healing_interval
-
-    def heal(self):
-        """Heal suffering reservations in the next healing interval.
-
-        :return: a dictionary of {reservation id: flags to update}
-        """
-        reservation_flags = {}
-        networks = db_api.unreservable_network_get_all_by_queries([])
-
-        interval_begin = datetime.datetime.utcnow()
-        interval = self.get_healing_interval()
-        if interval == 0:
-            interval_end = datetime.date.max
-        else:
-            interval_end = interval_begin + datetime.timedelta(
-                minutes=interval)
-
-        for handler in self.healing_handlers:
-            reservation_flags.update(handler(networks,
-                                             interval_begin,
-                                             interval_end))
-
-        return reservation_flags

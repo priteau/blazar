@@ -20,7 +20,6 @@ from keystoneauth1 import session
 import mock
 from neutronclient.v2_0 import client as neutron_client
 from oslo_config import cfg
-from oslo_config import fixture as conf_fixture
 
 from blazar import context
 from blazar.db import api as db_api
@@ -38,42 +37,10 @@ from blazar.utils import trusts
 CONF = cfg.CONF
 
 
-class PhysicalNetworkPluginSetupOnlyTestCase(tests.TestCase):
+class NetworkPluginTestCase(tests.TestCase):
 
     def setUp(self):
-        super(PhysicalNetworkPluginSetupOnlyTestCase, self).setUp()
-
-        self.cfg = self.useFixture(conf_fixture.Config(CONF))
-        self.cfg.config(os_admin_username='fake-user')
-        self.cfg.config(os_admin_password='fake-passwd')
-        self.cfg.config(os_admin_user_domain_name='fake-user-domain')
-        self.cfg.config(os_admin_project_name='fake-pj-name')
-        self.cfg.config(os_admin_project_domain_name='fake-pj-domain')
-
-        self.context = context
-        self.patch(self.context, 'BlazarContext')
-        self.patch(base, 'url_for').return_value = 'http://foo.bar'
-        self.network_plugin = network_plugin
-        self.fake_network_plugin = self.network_plugin.PhysicalNetworkPlugin()
-        self.db_api = db_api
-        self.db_network_extra_capability_get_all_per_network = (
-            self.patch(self.db_api,
-                       'network_extra_capability_get_all_per_network'))
-
-    def test_configuration(self):
-        self.assertEqual("fake-user", self.fake_network_plugin.username)
-        self.assertEqual("fake-passwd", self.fake_network_plugin.password)
-        self.assertEqual("fake-user-domain",
-                         self.fake_network_plugin.user_domain_name)
-        self.assertEqual("fake-pj-name", self.fake_network_plugin.project_name)
-        self.assertEqual("fake-pj-domain",
-                         self.fake_network_plugin.project_domain_name)
-
-
-class PhysicalNetworkPluginTestCase(tests.TestCase):
-
-    def setUp(self):
-        super(PhysicalNetworkPluginTestCase, self).setUp()
+        super(NetworkPluginTestCase, self).setUp()
         self.cfg = cfg
         self.context = context
         self.patch(self.context, 'BlazarContext')
@@ -98,7 +65,7 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
 
         self.patch(base, 'url_for').return_value = 'http://foo.bar'
         self.network_plugin = network_plugin
-        self.fake_network_plugin = self.network_plugin.PhysicalNetworkPlugin()
+        self.fake_network_plugin = self.network_plugin.NetworkPlugin()
         self.db_api = db_api
         self.db_utils = db_utils
 
