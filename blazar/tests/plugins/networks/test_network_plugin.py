@@ -19,11 +19,8 @@ from keystoneauth1 import identity
 from keystoneauth1 import session
 import mock
 from neutronclient.v2_0 import client as neutron_client
-from novaclient import client as nova_client
-from novaclient import exceptions as nova_exceptions
 from oslo_config import cfg
 from oslo_config import fixture as conf_fixture
-import testtools
 
 from blazar import context
 from blazar.db import api as db_api
@@ -60,7 +57,8 @@ class PhysicalNetworkPluginSetupOnlyTestCase(tests.TestCase):
         self.fake_network_plugin = self.network_plugin.PhysicalNetworkPlugin()
         self.db_api = db_api
         self.db_network_extra_capability_get_all_per_network = (
-            self.patch(self.db_api, 'network_extra_capability_get_all_per_network'))
+            self.patch(self.db_api,
+                       'network_extra_capability_get_all_per_network'))
 
     def test_configuration(self):
         self.assertEqual("fake-user", self.fake_network_plugin.username)
@@ -90,12 +88,13 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
         self.manager = self.service.ManagerService()
 
         self.fake_network_id = 'e3ed59f3-27e6-48df-b8bd-2a397aeb57dc'
-        self.fake_network = {
-            'id': self.fake_network_id,
+        self.fake_network_values = {
             'network_type': 'vlan',
             'physical_network': 'physnet1',
             'segment_id': 1234
         }
+        self.fake_network = self.fake_network_values.copy()
+        self.fake_network['id'] = self.fake_network_id
 
         self.patch(base, 'url_for').return_value = 'http://foo.bar'
         self.network_plugin = network_plugin
@@ -149,22 +148,63 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
     def test_get_network(self):
         network = self.fake_network_plugin.get_network(self.fake_network_id)
         self.db_network_get.assert_called_once_with(self.fake_network_id)
-        self.assertEqual(network, self.fake_network)
+        expected = self.fake_network.copy()
+        expected.update({'foo': 'bar', 'buzz': 'word'})
+        self.assertEqual(expected, network)
+
+    def test_get_network_without_extracapabilities(self):
+        self.get_extra_capabilities.return_value = {}
+        network = self.fake_network_plugin.get_network(self.fake_network_id)
+        self.db_network_get.assert_called_once_with(self.fake_network_id)
+        self.assertEqual(self.fake_network, network)
 
     def test_list_networks(self):
         self.fake_network_plugin.list_networks()
         self.db_network_list.assert_called_once_with()
 
-    def test_create_network(self):
+    def test_create_network_without_extra_capabilities(self):
         network_values = {
             'network_type': 'vlan',
             'physical_network': 'physnet1',
             'segment_id': 1234
         }
         expected_network_values = network_values.copy()
+        self.get_extra_capabilities.return_value = {}
         network = self.fake_network_plugin.create_network(network_values)
         self.db_network_create.assert_called_once_with(expected_network_values)
         self.assertEqual(network, self.fake_network)
+
+    def test_create_network_with_extra_capabilities(self):
+        fake_network = self.fake_network.copy()
+        fake_network.update({'foo': 'bar'})
+        # NOTE(sbauza): 'id' will be pop'd, we need to keep track of it
+        fake_request = fake_network.copy()
+        fake_capa = {'network_id': self.fake_network_id,
+                     'capability_name': 'foo',
+                     'capability_value': 'bar',
+                     }
+        self.get_extra_capabilities.return_value = {'foo': 'bar'}
+        self.db_network_create.return_value = self.fake_network
+        network = self.fake_network_plugin.create_network(fake_request)
+        self.db_network_create.assert_called_once_with(
+            self.fake_network_values)
+        self.db_network_extra_capability_create.assert_called_once_with(
+            fake_capa)
+        self.assertEqual(network, fake_network)
+
+    def test_create_network_with_capabilities_too_long(self):
+        fake_network = self.fake_network_values.copy()
+        fake_network.update({'foo': 'bar'})
+        # NOTE(sbauza): 'id' will be pop'd, we need to keep track of it
+        fake_request = fake_network.copy()
+        long_key = ""
+        for i in range(65):
+            long_key += "0"
+        fake_request[long_key] = "foo"
+        self.db_network_create.return_value = self.fake_network
+        self.assertRaises(manager_exceptions.ExtraCapabilityTooLong,
+                          self.fake_network_plugin.create_network,
+                          fake_request)
 
     def test_create_network_without_required_params(self):
         self.assertRaises(manager_exceptions.MissingParameter,
@@ -184,6 +224,14 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
                            'physical_network': 'physnet1',
                            'segment_id': 4095})
 
+    def test_create_network_issuing_rollback(self):
+        def fake_db_network_create(*args, **kwargs):
+            raise db_exceptions.BlazarDBException
+        self.db_network_create.side_effect = fake_db_network_create
+        self.assertRaises(db_exceptions.BlazarDBException,
+                          self.fake_network_plugin.create_network,
+                          self.fake_network)
+
     def test_create_duplicate_network(self):
         def fake_db_network_create(*args, **kwargs):
             raise db_exceptions.BlazarDBDuplicateEntry
@@ -192,6 +240,20 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
                           self.fake_network_plugin.create_network,
                           self.fake_network)
 
+    def test_create_network_having_issue_when_storing_extra_capability(self):
+        def fake_db_network_extra_capability_create(*args, **kwargs):
+            raise db_exceptions.BlazarDBException
+        fake_network = self.fake_network_values.copy()
+        fake_network.update({'foo': 'bar'})
+        fake_request = fake_network.copy()
+        self.get_extra_capabilities.return_value = {'foo': 'bar'}
+        self.db_network_create.return_value = self.fake_network
+        fake = self.db_network_extra_capability_create
+        fake.side_effect = fake_db_network_extra_capability_create
+        self.assertRaises(manager_exceptions.CantAddExtraCapability,
+                          self.fake_network_plugin.create_network,
+                          fake_request)
+
     def test_update_network(self):
         network_values = {'segment_id': 2345}
         self.fake_network_plugin.update_network(self.fake_network_id,
@@ -199,11 +261,87 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
         self.db_network_update.assert_called_once_with(
             self.fake_network_id, network_values)
 
-    def test_update_network_with_invalid_keys(self):
-        self.assertRaises(manager_exceptions.MalformedParameter,
+    def test_update_host(self):
+        network_values = {'foo': 'baz'}
+
+        self.db_network_extra_capability_get_all_per_name.return_value = [
+            {'id': 'extra_id1',
+             'network_id': self.fake_network_id,
+             'capability_name': 'foo',
+             'capability_value': 'bar'
+             },
+        ]
+
+        self.get_reservations_by_network = self.patch(
+            self.db_utils, 'get_reservations_by_network_id')
+        self.get_reservations_by_network.return_value = []
+
+        self.fake_network_plugin.update_network(self.fake_network_id,
+                                                network_values)
+        self.db_network_extra_capability_update.assert_called_once_with(
+            'extra_id1', {'capability_name': 'foo', 'capability_value': 'baz'})
+
+    def test_update_network_having_issue_when_storing_extra_capability(self):
+        def fake_db_network_extra_capability_update(*args, **kwargs):
+            raise RuntimeError
+        network_values = {'foo': 'baz'}
+        self.get_reservations_by_network = self.patch(
+            self.db_utils, 'get_reservations_by_network_id')
+        self.get_reservations_by_network.return_value = []
+        self.db_network_extra_capability_get_all_per_name.return_value = [
+            {'id': 'extra_id1',
+             'network_id': self.fake_network_id,
+             'capability_name': 'foo',
+             'capability_value': 'bar'
+             },
+        ]
+        fake = self.db_network_extra_capability_update
+        fake.side_effect = fake_db_network_extra_capability_update
+        self.assertRaises(manager_exceptions.CantAddExtraCapability,
                           self.fake_network_plugin.update_network,
-                          self.fake_network_id,
-                          {'foo': 'bar'})
+                          self.fake_network_id, network_values)
+
+    def test_update_network_with_new_extra_capability(self):
+        network_values = {'qux': 'word'}
+
+        self.db_network_extra_capability_get_all_per_network.return_value = []
+        self.fake_network_plugin.update_network(self.fake_network_id,
+                                                network_values)
+        self.db_network_extra_capability_create.assert_called_once_with({
+            'network_id': self.fake_network_id,
+            'capability_name': 'qux',
+            'capability_value': 'word'
+        })
+
+    def test_update_network_with_used_capability(self):
+        network_values = {'foo': 'buzz'}
+
+        self.db_network_extra_capability_get_all_per_name.return_value = [
+            {'id': 'extra_id1',
+             'network_id': self.fake_network_id,
+             'capability_name': 'foo',
+             'capability_value': 'bar'
+             },
+        ]
+        fake_network_reservation = {
+            'resource_type': plugin.RESOURCE_TYPE,
+            'resource_id': 'resource-1',
+        }
+
+        fake_get_reservations = self.patch(self.db_utils,
+                                           'get_reservations_by_network_id')
+        fake_get_reservations.return_value = [fake_network_reservation]
+
+        fake_get_plugin_reservation = self.patch(self.db_utils,
+                                                 'get_plugin_reservation')
+        fake_get_plugin_reservation.return_value = {
+            'resource_properties': '["==", "$foo", "bar"]'
+        }
+        self.assertRaises(manager_exceptions.CantAddExtraCapability,
+                          self.fake_network_plugin.update_network,
+                          self.fake_network_id, network_values)
+        fake_get_plugin_reservation.assert_called_once_with(
+            plugin.RESOURCE_TYPE, 'resource-1')
 
     def test_delete_network(self):
         network_allocation_get_all = self.patch(
@@ -309,8 +447,8 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
             'network_name': 'foo-net'
         }
         network_reservation_create.assert_called_once_with(network_values)
-        #self.check_usage_against_allocation.assert_called_once_with(
-        #    lease, allocated_network_ids=['network1', 'network2'])
+        # self.check_usage_against_allocation.assert_called_once_with(
+        #     lease, allocated_network_ids=['network1', 'network2'])
         calls = [
             mock.call(
                 {'network_id': 'network1',
@@ -351,849 +489,366 @@ class PhysicalNetworkPluginTestCase(tests.TestCase):
             u'441c1476-9f8f-4700-9f30-cd9b6fef3509',
             values)
 
-    # def test_update_reservation_shorten(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 30),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(
-    #         self.db_api, 'network_reservation_get')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_not_called()
-    #
-    # def test_update_reservation_extend(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 30)
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(
-    #         self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api,
-    #         'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'network_id': 'network1'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(
-    #         self.db_api, 'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [{'id': 'network1'}]
-    #     get_reserved_periods = self.patch(self.db_utils,
-    #                                       'get_reserved_periods')
-    #     get_reserved_periods.return_value = [
-    #         (datetime.datetime(2013, 12, 19, 20, 00),
-    #          datetime.datetime(2013, 12, 19, 21, 00))
-    #     ]
-    #     network_allocation_create = self.patch(
-    #         self.db_api,
-    #         'network_allocation_create')
-    #     network_allocation_destroy = self.patch(
-    #         self.db_api,
-    #         'network_allocation_destroy')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_allocation_create.assert_not_called()
-    #     network_allocation_destroy.assert_not_called()
-    #
-    # def test_update_reservation_move_failure(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2013, 12, 20, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 20, 21, 30)
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'active'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(
-    #         self.db_api,
-    #         'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'count_range': '1-1',
-    #         'network_properties': '["=", "$memory_mb", "256"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api,
-    #         'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [{'id': 'network1'}]
-    #     get_reserved_periods = self.patch(self.db_utils,
-    #                                       'get_reserved_periods')
-    #     get_reserved_periods.return_value = [
-    #         (datetime.datetime(2013, 12, 20, 20, 30),
-    #          datetime.datetime(2013, 12, 20, 21, 00))
-    #     ]
-    #     get_computenetworks = self.patch(self.nova.ReservationPool,
-    #                                   'get_computenetworks')
-    #     get_computenetworks.return_value = ['network1']
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = []
-    #     self.assertRaises(
-    #         manager_exceptions.NotEnoughnetworksAvailable,
-    #         self.fake_network_plugin.update_reservation,
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     reservation_get.assert_called()
-    #
-    # def test_update_reservation_move_overlap(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 30),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 30)
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(
-    #         self.db_api,
-    #         'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'count_range': '1-1',
-    #         'network_properties': '["=", "$memory_mb", "256"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api,
-    #         'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [{'id': 'network1'}]
-    #     get_reserved_periods = self.patch(self.db_utils,
-    #                                       'get_reserved_periods')
-    #     get_reserved_periods.return_value = [
-    #         (datetime.datetime(2013, 12, 19, 20, 30),
-    #          datetime.datetime(2013, 12, 19, 21, 00))
-    #     ]
-    #     network_allocation_create = self.patch(
-    #         self.db_api,
-    #         'network_allocation_create')
-    #     network_allocation_destroy = self.patch(
-    #         self.db_api,
-    #         'network_allocation_destroy')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_allocation_create.assert_not_called()
-    #     network_allocation_destroy.assert_not_called()
-    #
-    # def test_update_reservation_move_realloc(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2013, 12, 20, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 20, 21, 30)
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(
-    #         self.db_api,
-    #         'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'aggregate_id': 1,
-    #         'count_range': '1-1',
-    #         'network_properties': '["=", "$memory_mb", "256"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api,
-    #         'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [{'id': 'network1'},
-    #                                             {'id': 'network2'}]
-    #     network_allocation_create = self.patch(
-    #         self.db_api,
-    #         'network_allocation_create')
-    #     network_allocation_destroy = self.patch(
-    #         self.db_api,
-    #         'network_allocation_destroy')
-    #     get_reserved_periods = self.patch(self.db_utils,
-    #                                       'get_reserved_periods')
-    #     get_reserved_periods.return_value = [
-    #         (datetime.datetime(2013, 12, 20, 20, 30),
-    #          datetime.datetime(2013, 12, 20, 21, 00))
-    #     ]
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = ['network2']
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_called_with(
-    #         u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     network_allocation_destroy.assert_called_with(
-    #         'dd305477-4df8-4547-87f6-69069ee546a6')
-    #     network_allocation_create.assert_called_with(
-    #         {
-    #             'compute_network_id': 'network2',
-    #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
-    #         }
-    #     )
-    #
-    # def test_update_reservation_min_increase_success(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'min': 3
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '2-3',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'},
-    #         {'id': 'network3'}
-    #     ]
-    #     network_allocation_destroy = self.patch(self.db_api,
-    #                                          'network_allocation_destroy')
-    #     network_allocation_create = self.patch(self.db_api,
-    #                                         'network_allocation_create')
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = ['network3']
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     self.check_usage_against_allocation_pre_update.assert_called_once_with(
-    #         values, lease_get.return_value,
-    #         network_allocation_get_all.return_value)
-    #     network_reservation_get.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_networks.assert_called_with(
-    #         '["=", "$memory_mb", "16384"]',
-    #         '',
-    #         '1-1',
-    #         datetime.datetime(2017, 7, 12, 20, 00),
-    #         datetime.datetime(2017, 7, 12, 21, 00)
-    #     )
-    #     network_allocation_destroy.assert_not_called()
-    #     network_allocation_create.assert_called_with(
-    #         {
-    #             'compute_network_id': 'network3',
-    #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
-    #         }
-    #     )
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'count_range': '3-3'}
-    #     )
-    #
-    # def test_update_reservation_min_increase_fail(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'min': 3
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '2-3',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'}
-    #     ]
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = []
-    #
-    #     self.assertRaises(
-    #         manager_exceptions.NotEnoughnetworksAvailable,
-    #         self.fake_network_plugin.update_reservation,
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     matching_networks.assert_called_with(
-    #         '["=", "$memory_mb", "16384"]',
-    #         '',
-    #         '1-1',
-    #         datetime.datetime(2017, 7, 12, 20, 00),
-    #         datetime.datetime(2017, 7, 12, 21, 00)
-    #     )
-    #
-    # def test_update_reservation_min_decrease(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'min': 1
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '2-2',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'}
-    #     ]
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     network_allocation_destroy = self.patch(self.db_api,
-    #                                          'network_allocation_destroy')
-    #     network_allocation_create = self.patch(self.db_api,
-    #                                         'network_allocation_create')
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     matching_networks.assert_not_called()
-    #     network_allocation_destroy.assert_not_called()
-    #     network_allocation_create.assert_not_called()
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'count_range': '1-2'}
-    #     )
-    #
-    # def test_update_reservation_max_increase_alloc(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'max': 3
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '1-2',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'},
-    #         {'id': 'network3'}
-    #     ]
-    #     network_allocation_destroy = self.patch(self.db_api,
-    #                                          'network_allocation_destroy')
-    #     network_allocation_create = self.patch(self.db_api,
-    #                                         'network_allocation_create')
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = ['network3']
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_networks.assert_called_with(
-    #         '["=", "$memory_mb", "16384"]',
-    #         '',
-    #         '0-1',
-    #         datetime.datetime(2017, 7, 12, 20, 00),
-    #         datetime.datetime(2017, 7, 12, 21, 00)
-    #     )
-    #     network_allocation_destroy.assert_not_called()
-    #     network_allocation_create.assert_called_with(
-    #         {
-    #             'compute_network_id': 'network3',
-    #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
-    #         }
-    #     )
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'count_range': '1-3'}
-    #     )
-    #
-    # def test_update_active_reservation_max_increase_alloc(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'max': 3
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'active'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '1-2',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': '',
-    #         'reservation_id': u'706eb3bc-07ed-4383-be93-b32845ece672',
-    #         'aggregate_id': 1,
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'},
-    #         {'id': 'network3'}
-    #     ]
-    #     network_allocation_destroy = self.patch(self.db_api,
-    #                                          'network_allocation_destroy')
-    #     network_allocation_create = self.patch(self.db_api,
-    #                                         'network_allocation_create')
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = ['network3']
-    #     network_get = self.patch(self.db_api, 'network_get')
-    #     network_get.return_value = {'hypervisor_networkname': 'network3_networkname'}
-    #     add_computenetwork = self.patch(
-    #         self.nova.ReservationPool, 'add_computenetwork')
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_networks.assert_called_with(
-    #         '["=", "$memory_mb", "16384"]',
-    #         '',
-    #         '0-1',
-    #         datetime.datetime(2017, 7, 12, 20, 00),
-    #         datetime.datetime(2017, 7, 12, 21, 00)
-    #     )
-    #     network_allocation_destroy.assert_not_called()
-    #     network_allocation_create.assert_called_with(
-    #         {
-    #             'compute_network_id': 'network3',
-    #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
-    #         }
-    #     )
-    #     add_computenetwork.assert_called_with(
-    #         1, 'network3_networkname')
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'count_range': '1-3'}
-    #     )
-    #
-    # def test_update_reservation_max_increase_noalloc(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'max': 3
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '1-2',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'}
-    #     ]
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = []
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_networks.assert_called_with(
-    #         '["=", "$memory_mb", "16384"]',
-    #         '',
-    #         '0-1',
-    #         datetime.datetime(2017, 7, 12, 20, 00),
-    #         datetime.datetime(2017, 7, 12, 21, 00)
-    #     )
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'count_range': '1-3'}
-    #     )
-    #
-    # def test_update_reservation_max_decrease(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'max': 1
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '1-2',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         },
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a7',
-    #             'compute_network_id': 'network2'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [
-    #         {'id': 'network1'},
-    #         {'id': 'network2'}
-    #     ]
-    #     network_allocation_destroy = self.patch(self.db_api,
-    #                                          'network_allocation_destroy')
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     network_allocation_destroy.assert_called_with(
-    #         'dd305477-4df8-4547-87f6-69069ee546a6')
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'count_range': '1-1'}
-    #     )
-    #
-    # def test_update_reservation_realloc_with_properties_change(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'network_properties': '["=", "$memory_mb", "32768"]',
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '1-1',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = [{'id': 'network2'}]
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = ['network2']
-    #     network_allocation_create = self.patch(self.db_api,
-    #                                         'network_allocation_create')
-    #     network_allocation_destroy = self.patch(self.db_api,
-    #                                          'network_allocation_destroy')
-    #     network_reservation_update = self.patch(self.db_api,
-    #                                          'network_reservation_update')
-    #
-    #     self.fake_network_plugin.update_reservation(
-    #         '706eb3bc-07ed-4383-be93-b32845ece672',
-    #         values)
-    #     network_reservation_get.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
-    #     matching_networks.assert_called_with(
-    #         '["=", "$memory_mb", "32768"]',
-    #         '',
-    #         '1-1',
-    #         datetime.datetime(2017, 7, 12, 20, 00),
-    #         datetime.datetime(2017, 7, 12, 21, 00)
-    #     )
-    #     network_allocation_create.assert_called_with(
-    #         {
-    #             'compute_network_id': 'network2',
-    #             'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
-    #         }
-    #     )
-    #     network_allocation_destroy.assert_called_with(
-    #         'dd305477-4df8-4547-87f6-69069ee546a6'
-    #     )
-    #     network_reservation_update.assert_called_with(
-    #         '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         {'network_properties': '["=", "$memory_mb", "32768"]'}
-    #     )
-    #
-    # def test_update_reservation_no_requested_networks_available(self):
-    #     values = {
-    #         'start_date': datetime.datetime(2017, 7, 12, 20, 00),
-    #         'end_date': datetime.datetime(2017, 7, 12, 21, 00),
-    #         'resource_properties': '[">=", "$vcpus", "32768"]'
-    #     }
-    #     reservation_get = self.patch(self.db_api, 'reservation_get')
-    #     reservation_get.return_value = {
-    #         'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
-    #         'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'status': 'pending'
-    #     }
-    #     lease_get = self.patch(self.db_api, 'lease_get')
-    #     lease_get.return_value = {
-    #         'start_date': datetime.datetime(2013, 12, 19, 20, 00),
-    #         'end_date': datetime.datetime(2013, 12, 19, 21, 00)
-    #     }
-    #     network_reservation_get = self.patch(self.db_api, 'network_reservation_get')
-    #     network_reservation_get.return_value = {
-    #         'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
-    #         'count_range': '1-1',
-    #         'network_properties': '["=", "$memory_mb", "16384"]',
-    #         'resource_properties': ''
-    #     }
-    #     network_allocation_get_all = self.patch(
-    #         self.db_api, 'network_allocation_get_all_by_values')
-    #     network_allocation_get_all.return_value = [
-    #         {
-    #             'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
-    #             'compute_network_id': 'network1'
-    #         }
-    #     ]
-    #     network_get_all_by_queries = self.patch(self.db_api,
-    #                                          'network_get_all_by_queries')
-    #     network_get_all_by_queries.return_value = []
-    #     matching_networks = self.patch(self.fake_network_plugin, '_matching_networks')
-    #     matching_networks.return_value = []
-    #
-    #     self.assertRaises(
-    #         manager_exceptions.NotEnoughnetworksAvailable,
-    #         self.fake_network_plugin.update_reservation,
-    #         '441c1476-9f8f-4700-9f30-cd9b6fef3509',
-    #         values)
+    def test_update_reservation_shorten(self):
+        values = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 30),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api, 'network_reservation_get')
+
+        self.fake_network_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values)
+        network_reservation_get.assert_not_called()
+
+    def test_update_reservation_extend(self):
+        values = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 30)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'status': 'pending'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api, 'network_reservation_get')
+        network_reservation_get.return_value = {
+            'network_properties': '["=", "$network_type", "vlan"]',
+            'resource_properties': ''
+        }
+        network_allocation_get_all = self.patch(
+            self.db_api,
+            'network_allocation_get_all_by_values')
+        network_allocation_get_all.return_value = [
+            {
+                'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
+                'network_id': 'network1'
+            }
+        ]
+        network_get_all_by_queries = self.patch(
+            self.db_api, 'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [{'id': 'network1'}]
+        get_reserved_periods = self.patch(self.db_utils,
+                                          'get_reserved_periods')
+        get_reserved_periods.return_value = [
+            (datetime.datetime(2013, 12, 19, 20, 00),
+             datetime.datetime(2013, 12, 19, 21, 00))
+        ]
+        network_allocation_create = self.patch(
+            self.db_api,
+            'network_allocation_create')
+        network_allocation_destroy = self.patch(
+            self.db_api,
+            'network_allocation_destroy')
+
+        self.fake_network_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values)
+        network_allocation_create.assert_not_called()
+        network_allocation_destroy.assert_not_called()
+
+    def test_update_reservation_move_failure(self):
+        values = {
+            'start_date': datetime.datetime(2013, 12, 20, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 20, 21, 30)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'status': 'active'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api,
+            'network_reservation_get')
+        network_reservation_get.return_value = {
+            'network_properties': '["=", "$network_type", "vlan"]',
+            'resource_properties': ''
+        }
+        network_allocation_get_all = self.patch(
+            self.db_api,
+            'network_allocation_get_all_by_values')
+        network_allocation_get_all.return_value = [
+            {
+                'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
+                'network_id': 'network1'
+            }
+        ]
+        network_get_all_by_queries = self.patch(self.db_api,
+                                                'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [{'id': 'network1'}]
+        get_reserved_periods = self.patch(self.db_utils,
+                                          'get_reserved_periods')
+        get_reserved_periods.return_value = [
+            (datetime.datetime(2013, 12, 20, 20, 30),
+             datetime.datetime(2013, 12, 20, 21, 00))
+        ]
+        matching_networks = self.patch(
+            self.fake_network_plugin, '_matching_networks')
+        matching_networks.return_value = []
+        self.assertRaises(
+            manager_exceptions.NotEnoughNetworksAvailable,
+            self.fake_network_plugin.update_reservation,
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values)
+        reservation_get.assert_called()
+
+    def test_update_reservation_move_overlap(self):
+        values = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 30),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 30)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'status': 'pending'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api,
+            'network_reservation_get')
+        network_reservation_get.return_value = {
+            'network_properties': '["=", "$network_type", "vlan"]',
+            'resource_properties': ''
+        }
+        network_allocation_get_all = self.patch(
+            self.db_api,
+            'network_allocation_get_all_by_values')
+        network_allocation_get_all.return_value = [
+            {
+                'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
+                'network_id': 'network1'
+            }
+        ]
+        network_get_all_by_queries = self.patch(self.db_api,
+                                                'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [{'id': 'network1'}]
+        get_reserved_periods = self.patch(self.db_utils,
+                                          'get_reserved_periods')
+        get_reserved_periods.return_value = [
+            (datetime.datetime(2013, 12, 19, 20, 30),
+             datetime.datetime(2013, 12, 19, 21, 00))
+        ]
+        network_allocation_create = self.patch(
+            self.db_api,
+            'network_allocation_create')
+        network_allocation_destroy = self.patch(
+            self.db_api,
+            'network_allocation_destroy')
+
+        self.fake_network_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values)
+        network_allocation_create.assert_not_called()
+        network_allocation_destroy.assert_not_called()
+
+    def test_update_reservation_move_realloc(self):
+        values = {
+            'start_date': datetime.datetime(2013, 12, 20, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 20, 21, 30)
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': u'10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'status': 'pending'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api,
+            'network_reservation_get')
+        network_reservation_get.return_value = {
+            'network_properties': '["=", "$network_type", "vlan"]',
+            'resource_properties': ''
+        }
+        network_allocation_get_all = self.patch(
+            self.db_api,
+            'network_allocation_get_all_by_values')
+        network_allocation_get_all.return_value = [
+            {
+                'id': u'dd305477-4df8-4547-87f6-69069ee546a6',
+                'network_id': 'network1'
+            }
+        ]
+        network_get_all_by_queries = self.patch(self.db_api,
+                                                'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [{'id': 'network1'},
+                                                   {'id': 'network2'}]
+        network_allocation_create = self.patch(
+            self.db_api,
+            'network_allocation_create')
+        network_allocation_destroy = self.patch(
+            self.db_api,
+            'network_allocation_destroy')
+        get_reserved_periods = self.patch(self.db_utils,
+                                          'get_reserved_periods')
+        get_reserved_periods.return_value = [
+            (datetime.datetime(2013, 12, 20, 20, 30),
+             datetime.datetime(2013, 12, 20, 21, 00))
+        ]
+        matching_networks = self.patch(
+            self.fake_network_plugin, '_matching_networks')
+        matching_networks.return_value = ['network2']
+        self.fake_network_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values)
+        network_reservation_get.assert_called_with(
+            u'91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
+        network_allocation_destroy.assert_called_with(
+            'dd305477-4df8-4547-87f6-69069ee546a6')
+        network_allocation_create.assert_called_with(
+            {
+                'network_id': 'network2',
+                'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
+            }
+        )
+
+    def test_update_reservation_realloc_with_properties_change(self):
+        values = {
+            'start_date': datetime.datetime(2017, 7, 12, 20, 00),
+            'end_date': datetime.datetime(2017, 7, 12, 21, 00),
+            'network_properties': '["=", "$network_type", "vlan"]',
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'status': 'pending'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2017, 7, 12, 20, 00),
+            'end_date': datetime.datetime(2017, 7, 12, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api, 'network_reservation_get')
+        network_reservation_get.return_value = {
+            'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'network_properties': '["=", "$network_type", "vlan"]',
+            'resource_properties': ''
+        }
+        network_allocation_get_all = self.patch(
+            self.db_api, 'network_allocation_get_all_by_values')
+        network_allocation_get_all.return_value = [
+            {
+                'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
+                'network_id': 'network1'
+            }
+        ]
+        network_get_all_by_queries = self.patch(self.db_api,
+                                                'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [{'id': 'network2'}]
+        matching_networks = self.patch(
+            self.fake_network_plugin, '_matching_networks')
+        matching_networks.return_value = ['network2']
+        network_allocation_create = self.patch(self.db_api,
+                                               'network_allocation_create')
+        network_allocation_destroy = self.patch(self.db_api,
+                                                'network_allocation_destroy')
+        network_reservation_update = self.patch(self.db_api,
+                                                'network_reservation_update')
+
+        self.fake_network_plugin.update_reservation(
+            '706eb3bc-07ed-4383-be93-b32845ece672',
+            values)
+        network_reservation_get.assert_called_with(
+            '91253650-cc34-4c4f-bbe8-c943aa7d0c9b')
+        matching_networks.assert_called_with(
+            '["=", "$network_type", "vlan"]',
+            '',
+            '1-1',
+            datetime.datetime(2017, 7, 12, 20, 00),
+            datetime.datetime(2017, 7, 12, 21, 00)
+        )
+        network_allocation_create.assert_called_with(
+            {
+                'network_id': 'network2',
+                'reservation_id': '706eb3bc-07ed-4383-be93-b32845ece672'
+            }
+        )
+        network_allocation_destroy.assert_called_with(
+            'dd305477-4df8-4547-87f6-69069ee546a6'
+        )
+        network_reservation_update.assert_called_with(
+            '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            {'network_properties': '["=", "$network_type", "vlan"]'}
+        )
+
+    def test_update_reservation_no_requested_networks_available(self):
+        values = {
+            'start_date': datetime.datetime(2017, 7, 12, 20, 00),
+            'end_date': datetime.datetime(2017, 7, 12, 21, 00),
+            'resource_properties': '["=", "$segment_id", "2345"]'
+        }
+        reservation_get = self.patch(self.db_api, 'reservation_get')
+        reservation_get.return_value = {
+            'lease_id': '10870923-6d56-45c9-b592-f788053f5baa',
+            'resource_id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'status': 'pending'
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = {
+            'start_date': datetime.datetime(2013, 12, 19, 20, 00),
+            'end_date': datetime.datetime(2013, 12, 19, 21, 00)
+        }
+        network_reservation_get = self.patch(
+            self.db_api, 'network_reservation_get')
+        network_reservation_get.return_value = {
+            'id': '91253650-cc34-4c4f-bbe8-c943aa7d0c9b',
+            'network_properties': '["=", "$network_type", "vlan"]',
+            'resource_properties': ''
+        }
+        network_allocation_get_all = self.patch(
+            self.db_api, 'network_allocation_get_all_by_values')
+        network_allocation_get_all.return_value = [
+            {
+                'id': 'dd305477-4df8-4547-87f6-69069ee546a6',
+                'network_id': 'network1'
+            }
+        ]
+        network_get_all_by_queries = self.patch(self.db_api,
+                                                'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = []
+        matching_networks = self.patch(
+            self.fake_network_plugin, '_matching_networks')
+        matching_networks.return_value = []
+
+        self.assertRaises(
+            manager_exceptions.NotEnoughNetworksAvailable,
+            self.fake_network_plugin.update_reservation,
+            '441c1476-9f8f-4700-9f30-cd9b6fef3509',
+            values)
 
     def test_on_start(self):
         lease_get = self.patch(self.db_api, 'lease_get')

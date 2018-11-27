@@ -95,6 +95,21 @@ def get_reservations_by_host_ids(host_ids, start_date, end_date):
     return query.all()
 
 
+def get_reservations_by_network_id(network_id, start_date, end_date):
+    session = get_session()
+    border0 = sa.and_(models.Lease.start_date < start_date,
+                      models.Lease.end_date < start_date)
+    border1 = sa.and_(models.Lease.start_date > end_date,
+                      models.Lease.end_date > end_date)
+    query = (api.model_query(models.Reservation, session=session)
+             .join(models.Lease)
+             .join(models.NetworkAllocation)
+             .filter(models.NetworkAllocation.deleted.is_(None))
+             .filter(models.NetworkAllocation.network_id == network_id)
+             .filter(~sa.or_(border0, border1)))
+    return query.all()
+
+
 def get_plugin_reservation(resource_type, resource_id):
     if resource_type == host_plugin.RESOURCE_TYPE:
         return api.host_reservation_get(resource_id)

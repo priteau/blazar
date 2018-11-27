@@ -31,7 +31,6 @@ from blazar.manager import exceptions as manager_ex
 from blazar.plugins import base
 from blazar.plugins import networks as plugin
 from blazar import status
-from blazar.utils.openstack import keystone
 from blazar.utils.openstack import nova
 from blazar.utils import plugins as plugins_utils
 
@@ -283,7 +282,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
             for allocation in [alloc for alloc
                                in reservation['computenetwork_allocations']
-                               if alloc['compute_network_id'] in network_ids]:
+                               if alloc['network_id'] in network_ids]:
                 if self._reallocate(allocation):
                     if reservation['status'] == status.reservation.ACTIVE:
                         if reservation['id'] not in reservation_flags:
@@ -312,7 +311,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
         # Remove the old network from the aggregate.
         if reservation['status'] == status.reservation.ACTIVE:
-            network = db_api.network_get(allocation['compute_network_id'])
+            network = db_api.network_get(allocation['network_id'])
             pool.remove_network(h_reservation['aggregate_id'],
                                     network['hypervisor_networkname'])
 
@@ -331,7 +330,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         else:
             new_networkid = new_networkids.pop()
             db_api.network_allocation_update(allocation['id'],
-                                          {'compute_network_id': new_networkid})
+                                          {'network_id': new_networkid})
             LOG.warn('Resource changed for reservation %s (lease: %s).',
                      reservation['id'], lease['name'])
             if reservation['status'] == status.reservation.ACTIVE:
@@ -353,7 +352,13 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
 
     def get_network(self, network_id):
         network = db_api.network_get(network_id)
-        return network
+        extra_capabilities = self._get_extra_capabilities(network_id)
+        if network is not None and extra_capabilities:
+            res = network.copy()
+            res.update(extra_capabilities)
+            return res
+        else:
+            return network
 
     def list_networks(self):
         raw_network_list = db_api.network_list()
@@ -388,11 +393,34 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             'segment_id': segment_id
         }
         network = db_api.network_create(network_values)
+
+        to_store = set(values.keys()) - set(network.keys())
+        extra_capabilities_keys = to_store
+        extra_capabilities = dict(
+            (key, values[key]) for key in extra_capabilities_keys
+        )
+        if any([len(key) > 64 for key in extra_capabilities_keys]):
+            raise manager_ex.ExtraCapabilityTooLong()
+
+        cantaddextracapability = []
+        for key in extra_capabilities:
+            values = {'network_id': network['id'],
+                      'capability_name': key,
+                      'capability_value': extra_capabilities[key],
+                      }
+            try:
+                db_api.network_extra_capability_create(values)
+            except db_ex.BlazarDBException:
+                cantaddextracapability.append(key)
+        if cantaddextracapability:
+            raise manager_ex.CantAddExtraCapability(
+                keys=cantaddextracapability,
+                host=network['id'])
         return self.get_network(network['id'])
 
     def is_updatable_extra_capability(self, capability):
         reservations = db_utils.get_reservations_by_network_id(
-            capability['computenetwork_id'], datetime.datetime.utcnow(),
+            capability['network_id'], datetime.datetime.utcnow(),
             datetime.date.max)
 
         for r in reservations:
@@ -412,14 +440,15 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         return True
 
     def update_network(self, network_id, values):
+        # nothing to update
+        if not values:
+            return self.get_network(network_id)
+
         network = db_api.network_get(network_id)
         if not network:
             raise manager_ex.NetworkNotFound(network=network_id)
 
         updatable = ['network_type', 'physical_network', 'segment_id']
-        for key in values.keys():
-            if key not in updatable:
-                raise manager_ex.MalformedParameter(param=key)
 
         network_type = values.get('network_type')
         if network_type == 'vlan':
@@ -436,7 +465,52 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
         for key in updatable:
             if key in values and values[key] is not None:
                 new_values[key] = values[key]
-        return db_api.network_update(network_id, new_values)
+        db_api.network_update(network_id, new_values)
+
+        cant_update_extra_capability = []
+        previous_capabilities = self._get_extra_capabilities(network_id)
+        updated_keys = set(values.keys()) & set(previous_capabilities.keys())
+        new_keys = set(values.keys()) - set(previous_capabilities.keys())
+
+        for key in updated_keys:
+            raw_capability = next(iter(
+                db_api.network_extra_capability_get_all_per_name(network_id, key)))
+            capability = {
+                'capability_name': key,
+                'capability_value': values[key],
+            }
+            if self.is_updatable_extra_capability(raw_capability):
+                try:
+                    db_api.network_extra_capability_update(
+                        raw_capability['id'], capability)
+                except (db_ex.BlazarDBException, RuntimeError):
+                    cant_update_extra_capability.append(
+                        raw_capability['capability_name'])
+            else:
+                LOG.info("Capability %s can't be updated because "
+                         "existing reservations require it.",
+                         raw_capability['capability_name'])
+                cant_update_extra_capability.append(
+                    raw_capability['capability_name'])
+
+        for key in new_keys:
+            new_capability = {
+                'network_id': network_id,
+                'capability_name': key,
+                'capability_value': values[key],
+            }
+            try:
+                db_api.network_extra_capability_create(new_capability)
+            except (db_ex.BlazarDBException, RuntimeError):
+                cant_update_extra_capability.append(
+                    new_capability['capability_name'])
+
+        if cant_update_extra_capability:
+            raise manager_ex.CantAddExtraCapability(
+                network=network_id, keys=cant_update_extra_capability)
+
+        LOG.info('Extra capabilities on compute network %s updated with %s',
+                 network_id, values)
 
     def delete_network(self, network_id):
         network = db_api.network_get(network_id)
@@ -444,7 +518,7 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             raise manager_ex.NetworkNotFound(network=network_id)
 
         if db_api.network_allocation_get_all_by_values(
-                compute_network_id=network_id):
+                network_id=network_id):
             raise manager_ex.CantDeleteNetwork(
                 network=network_id,
                 msg='The network is reserved.'
@@ -464,7 +538,8 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             # they have to rerun
             raise manager_ex.CantDeleteNetwork(network=network_id, msg=str(e))
 
-    def _matching_networks(self, resource_properties, start_date, end_date):
+    def _matching_networks(self, network_properties, resource_properties,
+                           start_date, end_date):
         """Return the matching networks (preferably not allocated)"""
         allocated_network_ids = []
         not_allocated_network_ids = []
@@ -475,6 +550,9 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             minutes=CONF.cleaning_time)
 
         # TODO(frossigneux) support "or" operator
+        if network_properties:
+            filter_array = plugins_utils.convert_requirements(
+                network_properties)
         if resource_properties:
             filter_array += plugins_utils.convert_requirements(
                 resource_properties)
@@ -524,12 +602,6 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
     def _update_allocations(self, dates_before, dates_after, reservation_id,
                             reservation_status, network_reservation, values,
                             lease):
-        min_networks = self._convert_int_param(values.get(
-            'min', network_reservation['count_range'].split('-')[0]), 'min')
-        max_networks = self._convert_int_param(values.get(
-            'max', network_reservation['count_range'].split('-')[1]), 'max')
-        if min_networks < 0 or max_networks < min_networks:
-            raise manager_ex.InvalidRange()
         network_properties = values.get(
             'network_properties',
             network_reservation['network_properties'])
@@ -540,29 +612,29 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             reservation_id=reservation_id)
 
         allocs_to_remove = self._allocations_to_remove(
-            dates_before, dates_after, max_networks, network_properties,
+            dates_before, dates_after, network_properties,
             resource_properties, allocs)
 
         if (allocs_to_remove and
                 reservation_status == status.reservation.ACTIVE):
-            raise manager_ex.NotEnoughHostsAvailable()
+            raise manager_ex.NotEnoughNetworksAvailable()
 
         kept_networks = len(allocs) - len(allocs_to_remove)
         network_ids_to_add = []
-        if kept_networks < max_networks:
-            min_networks = min_networks - kept_networks \
-                if (min_networks - kept_networks) > 0 else 0
-            max_networks = max_networks - kept_networks
+        if kept_networks < 1:
+            min_networks = 1 - kept_networks \
+                if (1 - kept_networks) > 0 else 0
+            max_networks = 1 - kept_networks
             network_ids_to_add = self._matching_networks(
                 network_properties, resource_properties,
                 str(min_networks) + '-' + str(max_networks),
                 dates_after['start_date'], dates_after['end_date'])
 
             if len(network_ids_to_add) < min_networks:
-                raise manager_ex.NotEnoughHostsAvailable()
+                raise manager_ex.NotEnoughNetworksAvailable()
 
         allocs_to_keep = [a for a in allocs if a not in allocs_to_remove]
-        allocs_to_add = [{'compute_network_id': h} for h in network_ids_to_add]
+        allocs_to_add = [{'network_id': h} for h in network_ids_to_add]
         new_allocations = allocs_to_keep + allocs_to_add
 
 ###        try:
@@ -577,31 +649,31 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
             LOG.debug('Adding network {} to reservation {}'.format(
                 network_id, reservation_id))
             db_api.network_allocation_create(
-                {'compute_network_id': network_id,
+                {'network_id': network_id,
                  'reservation_id': reservation_id})
 
         for allocation in allocs_to_remove:
             LOG.debug('Removing network {} from reservation {}'.format(
-                allocation['compute_network_id'], reservation_id))
+                allocation['network_id'], reservation_id))
             db_api.network_allocation_destroy(allocation['id'])
 
-    def _allocations_to_remove(self, dates_before, dates_after, max_networks,
+    def _allocations_to_remove(self, dates_before, dates_after,
                                network_properties, resource_properties,
                                allocs):
-        """Finds candidate compute network allocations to remove"""
+        """Finds candidate network allocations to remove"""
         allocs_to_remove = []
         requested_network_ids = [network['id'] for network in
-                              self._filter_networks_by_properties(
-                                  network_properties, resource_properties)]
+                                 self._filter_networks_by_properties(
+                                 network_properties, resource_properties)]
 
         for alloc in allocs:
-            if alloc['compute_network_id'] not in requested_network_ids:
+            if alloc['network_id'] not in requested_network_ids:
                 allocs_to_remove.append(alloc)
                 continue
             if (dates_before['start_date'] > dates_after['start_date'] or
                     dates_before['end_date'] < dates_after['end_date']):
                 reserved_periods = db_utils.get_reserved_periods(
-                    alloc['compute_network_id'],
+                    alloc['network_id'],
                     dates_after['start_date'],
                     dates_after['end_date'],
                     datetime.timedelta(seconds=1))
@@ -619,17 +691,17 @@ class PhysicalNetworkPlugin(base.BasePlugin, nova.NovaClientWrapper):
                     continue
 
         kept_networks = len(allocs) - len(allocs_to_remove)
-        if kept_networks > max_networks:
+        if kept_networks > 1:
             allocs_to_remove.extend(
                 [allocation for allocation in allocs
                  if allocation not in allocs_to_remove
-                 ][:(kept_networks - max_networks)]
+                 ][:(kept_networks - 1)]
             )
 
         return allocs_to_remove
 
     def _filter_networks_by_properties(self, network_properties,
-                                    resource_properties):
+                                       resource_properties):
         filter = []
         if network_properties:
             filter += plugins_utils.convert_requirements(network_properties)
@@ -712,7 +784,7 @@ class PhysicalHostMonitorPlugin(base.BaseMonitorPlugin,
                      'hypervisor_networkname == ' + data['network']])
                 if recovered_networks:
                     db_api.network_update(recovered_networks[0]['id'],
-                                       {'reservable': True})
+                                          {'reservable': True})
                     LOG.warn('%s recovered.',
                              recovered_networks[0]['hypervisor_networkname'])
 
