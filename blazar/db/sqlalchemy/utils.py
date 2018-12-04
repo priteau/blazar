@@ -58,7 +58,7 @@ def _get_leases_from_network_id(network_id, start_date, end_date):
              .join(models.Reservation)
              .join(models.NetworkAllocation)
              .filter(models.NetworkAllocation.deleted.is_(None))
-             .filter(models.NetworkAllocation.compute_network_id == network_id)
+             .filter(models.NetworkAllocation.network_id == network_id)
              .filter(~sa.or_(border0, border1)))
     for lease in query:
         yield lease
