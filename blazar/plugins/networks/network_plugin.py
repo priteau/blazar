@@ -221,15 +221,14 @@ class NetworkPlugin(base.BasePlugin):
         neutron = self.neutron(trust_id=trust_id)
 
         try:
-            networks = neutron.list_networks(id=network_id)
             ports = neutron.list_ports(network_id=network_id)
             instance_ports = neutron.list_ports(
                 device_owner='compute:nova', network_id=network_id)
             for instance_port in instance_ports['ports']:
-                self.delete_port(neutron, ironic, instance_port)
+                self.delete_port(neutron, self.ironic(), instance_port)
 
-            router_ids = [port['device_id'] for port in ports['ports'] if port['device_owner'] == 'network:router_interface']
-            print('Routers:')
+            router_ids = [port['device_id'] for port in ports['ports'] if
+                          port['device_owner'] == 'network:router_interface']
             for router_id in router_ids:
                 router_ports = neutron.list_ports(device_id=router_id)
 
@@ -255,9 +254,9 @@ class NetworkPlugin(base.BasePlugin):
             for subnet in subnets['subnets']:
                 self.delete_subnet(neutron, subnet['id'])
 
-            for network in networks['networks']:
-                neutron.delete_network(network['id'])
+            neutron.delete_network(network_id)
         except Exception:
+            LOG.exception("Failed to delete network %s", network_id)
             raise manager_ex.NetworkDeletionFailed(
                 network_id=network_id, reservation_id=reservation_id)
 

@@ -15,6 +15,7 @@
 
 import datetime
 
+from ironicclient import client as ironic_client
 from keystoneauth1 import identity
 from keystoneauth1 import session
 import mock
@@ -45,6 +46,9 @@ class NetworkPluginTestCase(tests.TestCase):
         self.context = context
         self.patch(self.context, 'BlazarContext')
 
+        self.ironic_client = ironic_client
+        self.ironic_client = self.patch(
+            self.ironic_client, 'get_client').return_value
         self.neutron_client = neutron_client
         self.neutron_client = self.patch(
             self.neutron_client, 'Client').return_value
