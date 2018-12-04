@@ -227,5 +227,5 @@ class NetworkCreationFailed(exceptions.BlazarException):
 
 
 class NetworkDeletionFailed(exceptions.BlazarException):
-    msg_fmt = _("Failed to create network %(network_id)s for reservation "
+    msg_fmt = _("Failed to delete network %(network_id)s for reservation "
                 "%(reservation_id)s")
