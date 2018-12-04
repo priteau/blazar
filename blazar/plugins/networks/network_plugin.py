@@ -521,7 +521,8 @@ class NetworkPlugin(base.BasePlugin):
                 network['id'],
                 start_date_with_margin,
                 end_date_with_margin,
-                end_date_with_margin - start_date_with_margin
+                end_date_with_margin - start_date_with_margin,
+                resource_type='network'
             ) == [
                 (start_date_with_margin, end_date_with_margin),
             ]:
@@ -622,7 +623,8 @@ class NetworkPlugin(base.BasePlugin):
                     alloc['network_id'],
                     dates_after['start_date'],
                     dates_after['end_date'],
-                    datetime.timedelta(seconds=1))
+                    datetime.timedelta(seconds=1),
+                    resource_type='network')
 
                 max_start = max(dates_before['start_date'],
                                 dates_after['start_date'])
