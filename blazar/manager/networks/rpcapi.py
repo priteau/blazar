@@ -35,23 +35,23 @@ class ManagerRPCAPI(service.RPCClient):
 
     def get_network(self, network_id):
         """Get detailed info about some network."""
-        return self.call('physical:network:get_network', network_id=network_id)
+        return self.call('network:get_network', network_id=network_id)
 
     def list_networks(self):
         """List all networks."""
-        return self.call('physical:network:list_networks')
+        return self.call('network:list_networks')
 
     def create_network(self, values):
         """Create network with specified parameters."""
-        return self.call('physical:network:create_network',
+        return self.call('network:create_network',
                          values=values)
 
     def update_network(self, network_id, values):
         """Update network with passes values dictionary."""
-        return self.call('physical:network:update_network', network_id=network_id,
+        return self.call('network:update_network', network_id=network_id,
                          values=values)
 
     def delete_network(self, network_id):
         """Delete specified network."""
-        return self.call('physical:network:delete_network',
+        return self.call('network:delete_network',
                          network_id=network_id)

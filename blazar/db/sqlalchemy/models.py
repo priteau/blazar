@@ -261,7 +261,7 @@ class NetworkSegment(mb.BlazarBase):
     # The physical mechanism by which the virtual network is implemented. For example: flat, geneve, gre, local, vlan, vxlan.
     network_type = sa.Column(sa.String(255), nullable=False)
     # Name of the physical network over which the virtual network is implemented
-    physical_network = sa.Column(sa.String(255), nullable=False)
+    physical_network = sa.Column(sa.String(255), nullable=True)
     # VLAN ID for VLAN networks or Tunnel ID for GENEVE/GRE/VXLAN networks
     segment_id = sa.Column(sa.Integer, nullable=False)
 

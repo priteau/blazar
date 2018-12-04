@@ -79,7 +79,7 @@ def make_app():
         if 'physical.host.plugin' in cfg.CONF.manager.plugins:
             app.register_blueprint(host_api_v1_0.rest,
                                    url_prefix='/v1/os-hosts')
-        if 'physical.network.plugin' in cfg.CONF.manager.plugins:
+        if 'network.plugin' in cfg.CONF.manager.plugins:
             app.register_blueprint(network_api_v1_0.rest,
                                    url_prefix='/v1/networks')
 
