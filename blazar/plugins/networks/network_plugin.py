@@ -59,6 +59,7 @@ class NetworkPlugin(base.BasePlugin):
 
         lease = db_api.lease_get(values['lease_id'])
         network_ids = self._matching_networks(
+            values['network_properties'],
             values['resource_properties'],
             values['start_date'],
             values['end_date'],

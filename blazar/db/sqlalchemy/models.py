@@ -303,3 +303,21 @@ class NetworkAllocation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
 
     def to_dict(self):
         return super(NetworkAllocation, self).to_dict()
+
+
+class NetworkSegmentExtraCapability(mb.BlazarBase):
+    """Description
+
+    Allows to define extra capabilities per administrator request for each
+    Network Segment added.
+    """
+
+    __tablename__ = 'networksegment_extra_capabilities'
+
+    id = _id_column()
+    networksegment_id = sa.Column(sa.String(36), sa.ForeignKey('network_segments.id'))
+    capability_name = sa.Column(sa.String(64), nullable=False)
+    capability_value = sa.Column(MediumText(), nullable=False)
+
+    def to_dict(self):
+        return super(NetworkSegmentExtraCapability, self).to_dict()
