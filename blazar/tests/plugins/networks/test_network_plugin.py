@@ -367,6 +367,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
             'start_date': now,
             'end_date': now + datetime.timedelta(hours=1),
+            'network_properties': '',
             'resource_properties': '',
             'resource_type': plugin.RESOURCE_TYPE,
         }
@@ -391,6 +392,7 @@ class NetworkPluginTestCase(tests.TestCase):
         }
         values = {
             'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'network_properties': '',
             'resource_properties': '',
             'start_date': datetime.datetime(2013, 12, 19, 20, 00),
             'end_date': datetime.datetime(2013, 12, 19, 21, 00),

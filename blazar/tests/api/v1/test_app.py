@@ -98,7 +98,7 @@ class AppTestCaseForNetworksPlugin(tests.TestCase):
         super(AppTestCaseForNetworksPlugin, self).setUp()
 
         cfg.CONF.set_override(
-            'plugins', ['physical.network.plugin'], 'manager')
+            'plugins', ['network.plugin'], 'manager')
         self.app = app
         self.network_api_v1_0 = network_api_v1_0
         self.flask = flask

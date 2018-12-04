@@ -41,7 +41,7 @@ before_end_options = ['', 'snapshot', 'default', 'email']
 
 
 class NetworkPlugin(base.BasePlugin):
-    """Plugin for physical network resource."""
+    """Plugin for network resource."""
     resource_type = plugin.RESOURCE_TYPE
     title = 'Network Plugin'
     description = 'This plugin creates and deletes networks.'
