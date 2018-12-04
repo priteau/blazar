@@ -120,9 +120,11 @@ def get_plugin_reservation(resource_type, resource_id):
     return IMPL.get_plugin_reservation(resource_type, resource_id)
 
 
-def get_free_periods(resource_id, start_date, end_date, duration):
+def get_free_periods(resource_id, start_date, end_date, duration,
+                     resource_type='host'):
     """Returns a list of free periods."""
-    return IMPL.get_free_periods(resource_id, start_date, end_date, duration)
+    return IMPL.get_free_periods(resource_id, start_date, end_date, duration,
+                                 resource_type=resource_type)
 
 
 def get_reserved_periods(resource_id, start_date, end_date, duration,
