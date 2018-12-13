@@ -284,6 +284,7 @@ class NetworkReservation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
     network_properties = sa.Column(MediumText())
     before_end = sa.Column(sa.String(36))
     network_name = sa.Column(sa.String(255))
+    description = sa.Column(sa.String(255))
     network_id = sa.Column(sa.String(255))
 
     def to_dict(self):

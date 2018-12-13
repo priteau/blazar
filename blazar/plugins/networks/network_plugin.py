@@ -78,10 +78,12 @@ class NetworkPlugin(base.BasePlugin):
 
         network_rsrv_values = {
             'reservation_id': reservation_id,
+            'network_properties': values['network_properties'],
             'resource_properties': values['resource_properties'],
             'status': 'pending',
             'before_end': values['before_end'],
-            'network_name': values['network_name']
+            'network_name': values['network_name'],
+            'description': values.get('description')
         }
         network_reservation = db_api.network_reservation_create(
             network_rsrv_values)
@@ -171,6 +173,7 @@ class NetworkPlugin(base.BasePlugin):
         """Creates a Neutron network using the allocated segment."""
         network_reservation = db_api.network_reservation_get(resource_id)
         network_name = network_reservation['network_name']
+        description = network_reservation['description']
         reservation_id = network_reservation['reservation_id']
 
         # We need the lease to get to the trust_id
@@ -191,9 +194,13 @@ class NetworkPlugin(base.BasePlugin):
                     "provider:segmentation_id": segment_id,
                 }
             }
+
             if physical_network:
                 network_body['network']['provider:physical_network'] = (
                     physical_network)
+
+            if description:
+                network_body['network']['description'] = description
 
             try:
                 network = neutron.create_network(body=network_body)
@@ -538,8 +545,14 @@ class NetworkPlugin(base.BasePlugin):
             return []
 
     def _check_params(self, values):
-        if 'resource_properties' not in values:
-            raise manager_ex.MissingParameter(param='resource_properties')
+        required_values = ['network_name', 'network_properties',
+                           'resource_properties']
+        for value in required_values:
+            if value not in values:
+                raise manager_ex.MissingParameter(param=value)
+
+        if 'description' in values:
+            values['description'] = str(values['description'])
 
         if 'before_end' not in values:
             values['before_end'] = 'default'

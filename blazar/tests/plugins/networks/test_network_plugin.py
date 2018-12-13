@@ -367,9 +367,10 @@ class NetworkPluginTestCase(tests.TestCase):
             'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
             'start_date': now,
             'end_date': now + datetime.timedelta(hours=1),
+            'resource_type': plugin.RESOURCE_TYPE,
+            'network_name': 'foo-net',
             'network_properties': '',
             'resource_properties': '',
-            'resource_type': plugin.RESOURCE_TYPE,
         }
         lease_get = self.patch(self.db_api, 'lease_get')
         lease_get.return_value = lease
@@ -397,7 +398,8 @@ class NetworkPluginTestCase(tests.TestCase):
             'start_date': datetime.datetime(2013, 12, 19, 20, 00),
             'end_date': datetime.datetime(2013, 12, 19, 21, 00),
             'resource_type': plugin.RESOURCE_TYPE,
-            'network_name': 'foo-net'
+            'network_name': 'foo-net',
+            'description': ''
         }
         lease_get = self.patch(self.db_api, 'lease_get')
         lease_get.return_value = lease
@@ -414,10 +416,12 @@ class NetworkPluginTestCase(tests.TestCase):
             values)
         network_values = {
             'reservation_id': u'441c1476-9f8f-4700-9f30-cd9b6fef3509',
+            'network_properties': '',
             'resource_properties': '',
             'status': 'pending',
             'before_end': 'default',
-            'network_name': 'foo-net'
+            'network_name': 'foo-net',
+            'description': ''
         }
         network_reservation_create.assert_called_once_with(network_values)
         # self.check_usage_against_allocation.assert_called_once_with(
@@ -450,11 +454,13 @@ class NetworkPluginTestCase(tests.TestCase):
     def test_create_reservation_with_invalid_param_before_end(self):
         values = {
             'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
-            'resource_properties': '',
             'before_end': 'invalid',
             'start_date': datetime.datetime(2017, 3, 1, 20, 00),
             'end_date': datetime.datetime(2017, 3, 2, 20, 00),
             'resource_type': plugin.RESOURCE_TYPE,
+            'network_name': 'foo-net',
+            'network_properties': '',
+            'resource_properties': '',
         }
         self.assertRaises(
             manager_exceptions.MalformedParameter,
@@ -841,6 +847,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'id': '04de74e8-193a-49d2-9ab8-cba7b49e45e8',
             'network_id': None,
             'network_name': 'foo-net',
+            'description': None,
             'reservation_id': u'593e7028-c0d1-4d76-8642-2ffd890b324c'
         }
         network_allocation_get_all_by_values = self.patch(
@@ -897,6 +904,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'id': '04de74e8-193a-49d2-9ab8-cba7b49e45e8',
             'network_id': None,
             'network_name': 'foo-net',
+            'description': None,
             'reservation_id': u'593e7028-c0d1-4d76-8642-2ffd890b324c'
         }
         network_allocation_get_all_by_values = self.patch(
