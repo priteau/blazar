@@ -21,6 +21,7 @@ from ironicclient import client as ironic_client
 from keystoneauth1 import identity
 from keystoneauth1 import session
 from neutronclient.v2_0 import client as neutron_client
+from neutronclient.common import exceptions as neutron_ex
 from oslo_config import cfg
 from oslo_log import log as logging
 
@@ -227,6 +228,12 @@ class NetworkPlugin(base.BasePlugin):
 
     def delete_neutron_network(self, network_id, reservation_id, trust_id):
         neutron = self.neutron(trust_id=trust_id)
+
+        try:
+            neutron.show_network(network_id)
+        except neutron_ex.NetworkNotFoundClient:
+            LOG.exception("Not deleting network %s", network_id)
+            return
 
         try:
             ports = neutron.list_ports(network_id=network_id)
