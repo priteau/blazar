@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import datetime
+import uuid
 
 from ironicclient import client as ironic_client
 from keystoneauth1 import identity
@@ -21,6 +22,7 @@ from keystoneauth1 import session
 import mock
 from neutronclient.v2_0 import client as neutron_client
 from oslo_config import cfg
+import six
 
 from blazar import context
 from blazar.db import api as db_api
@@ -356,6 +358,79 @@ class NetworkPluginTestCase(tests.TestCase):
                           self.fake_network_plugin.delete_network,
                           self.fake_network_id)
 
+    def generate_event(self, id, lease_id, event_type, time, status='UNDONE'):
+        return {
+            'id': id,
+            'lease_id': lease_id,
+            'event_type': event_type,
+            'time': time,
+            'status': status
+            }
+
+    def get_uuid(self):
+        return six.text_type(str(uuid.uuid4()))
+
+    def generate_basic_events(self, lease_id, start, before_end, end):
+        return [
+            self.generate_event(self.get_uuid(), lease_id, 'start_lease',
+                                datetime.datetime.strptime(start,
+                                                           '%Y-%m-%d %H:%M')),
+            self.generate_event(self.get_uuid(), lease_id, 'before_end_lease',
+                                datetime.datetime.strptime(before_end,
+                                                           '%Y-%m-%d %H:%M')),
+            self.generate_event(self.get_uuid(), lease_id, 'end_lease',
+                                datetime.datetime.strptime(end,
+                                                           '%Y-%m-%d %H:%M')),
+            ]
+
+    def test_query_available_resources_with_parallel_reservation(self):
+        def fake_event_get(sort_key, sort_dir, filters):
+            if filters['lease_id'] == 'lease-1':
+                return self.generate_basic_events('lease-1',
+                                                  '2030-01-01 08:00',
+                                                  '2030-01-01 10:00',
+                                                  '2030-01-01 11:00')
+            elif filters['lease_id'] == 'lease-2':
+                return self.generate_basic_events('lease-2',
+                                                  '2030-01-01 10:00',
+                                                  '2030-01-01 13:00',
+                                                  '2030-01-01 14:00')
+
+        available_vfcs = 10
+        available_vfc_resources = 50
+        self.cfg.CONF.set_override('available_vfcs', available_vfcs,
+                                   plugin.RESOURCE_TYPE)
+        self.cfg.CONF.set_override('available_vfc_resources',
+                                   available_vfc_resources,
+                                   plugin.RESOURCE_TYPE)
+        reservations = [
+            {
+                'lease_id': 'lease-1',
+                'resource_type': plugin.RESOURCE_TYPE,
+                'network_reservation': { 'vfc_resources': 2 }
+            },
+            {
+                'lease_id': 'lease-2',
+                'resource_type': plugin.RESOURCE_TYPE,
+                'network_reservation': { 'vfc_resources': 5 }
+            },
+        ]
+
+        network_get_all_by_queries = self.patch(db_api, 'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [{'id': 'network-1'}, {'id': 'network-2'}]
+        fake_get_reservations = self.patch(self.db_utils,
+                                           'get_reservations_by_network_id')
+        fake_get_reservations.side_effect = [[reservations[0]], [reservations[1]]]
+        mock_event_get = self.patch(db_api, 'event_get_all_sorted_by_filters')
+        mock_event_get.side_effect = fake_event_get
+
+        expected = (available_vfcs - 2, available_vfc_resources - 7)
+        ret = self.fake_network_plugin.query_available_resources(
+            datetime.datetime(2030, 01, 01, 07, 00),
+            datetime.datetime(2030, 01, 01, 15, 00))
+
+        self.assertEqual(expected, ret)
+
     def test_create_reservation_no_network_available(self):
         now = datetime.datetime.utcnow()
         lease = {
@@ -385,6 +460,70 @@ class NetworkPluginTestCase(tests.TestCase):
                           values)
         network_reservation_create.assert_not_called()
 
+    def test_create_reservation_no_vfc_available(self):
+        now = datetime.datetime.utcnow()
+        lease = {
+            'id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'user_id': '123',
+            'project_id': '456',
+        }
+        values = {
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'start_date': now,
+            'end_date': now + datetime.timedelta(hours=1),
+            'resource_type': plugin.RESOURCE_TYPE,
+            'network_name': 'foo-net',
+            'network_properties': '',
+            'resource_properties': '',
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = lease
+        network_reservation_create = self.patch(self.db_api,
+                                                'network_reservation_create')
+        matching_networks = self.patch(self.fake_network_plugin,
+                                       '_matching_networks')
+        matching_networks.return_value = ['network1', 'network2']
+        query_available_resources = self.patch(self.fake_network_plugin,
+                                               'query_available_resources')
+        query_available_resources.return_value = (0, 2)
+        self.assertRaises(manager_exceptions.NotEnoughNetworksAvailable,
+                          self.fake_network_plugin.reserve_resource,
+                          u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+                          values)
+        network_reservation_create.assert_not_called()
+
+    def test_create_reservation_not_enough_vfc_resources_available(self):
+        now = datetime.datetime.utcnow()
+        lease = {
+            'id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'user_id': '123',
+            'project_id': '456',
+        }
+        values = {
+            'lease_id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
+            'start_date': now,
+            'end_date': now + datetime.timedelta(hours=1),
+            'resource_type': plugin.RESOURCE_TYPE,
+            'network_name': 'foo-net',
+            'network_properties': '',
+            'resource_properties': '',
+        }
+        lease_get = self.patch(self.db_api, 'lease_get')
+        lease_get.return_value = lease
+        network_reservation_create = self.patch(self.db_api,
+                                                'network_reservation_create')
+        matching_networks = self.patch(self.fake_network_plugin,
+                                       '_matching_networks')
+        matching_networks.return_value = ['network1', 'network2']
+        query_available_resources = self.patch(self.fake_network_plugin,
+                                               'query_available_resources')
+        query_available_resources.return_value = (1, 1)
+        self.assertRaises(manager_exceptions.NotEnoughNetworksAvailable,
+                          self.fake_network_plugin.reserve_resource,
+                          u'f9894fcf-e2ed-41e9-8a4c-92fac332608e',
+                          values)
+        network_reservation_create.assert_not_called()
+
     def test_create_reservation_networks_available(self):
         lease = {
             'id': u'018c1b43-e69e-4aef-a543-09681539cf4c',
@@ -405,9 +544,14 @@ class NetworkPluginTestCase(tests.TestCase):
         lease_get.return_value = lease
         network_reservation_create = self.patch(self.db_api,
                                                 'network_reservation_create')
+        network_get_all_by_queries = self.patch(self.db_api,
+                                                'network_get_all_by_queries')
         matching_networks = self.patch(self.fake_network_plugin,
                                        '_matching_networks')
         matching_networks.return_value = ['network1', 'network2']
+        query_available_resources = self.patch(self.fake_network_plugin,
+                                              'query_available_resources')
+        query_available_resources.return_value = (1, 2)
         network_allocation_create = self.patch(
             self.db_api,
             'network_allocation_create')

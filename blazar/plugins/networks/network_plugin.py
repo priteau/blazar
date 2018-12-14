@@ -34,7 +34,20 @@ from blazar.plugins import networks as plugin
 from blazar import status
 from blazar.utils import plugins as plugins_utils
 
+plugin_opts = [
+    cfg.IntOpt('available_vfcs',
+               default=63,
+               help='Number of VFCs available for allocation to users'),
+    cfg.IntOpt('available_vfc_resources',
+               default=100,
+               help='Amount of resources available for VFCs allocated to users'),
+    cfg.IntOpt('resources_per_vfc',
+               default=2,
+               help='Default amount of resources allocated for each VFC'),
+]
+
 CONF = cfg.CONF
+CONF.register_opts(plugin_opts, group=plugin.RESOURCE_TYPE)
 LOG = logging.getLogger(__name__)
 
 
@@ -54,6 +67,93 @@ class NetworkPlugin(base.BasePlugin):
     def set_usage_enforcer(self, usage_enforcer):
         self.usage_enforcer = usage_enforcer
 
+    def filter_networks_by_reservation(self, networks, start_date, end_date):
+        free = []
+        non_free = []
+
+        for network in networks:
+            reservations = db_utils.get_reservations_by_network_id(
+                network['id'], start_date, end_date)
+            print reservations
+
+            if reservations == []:
+                free.append({'network': network, 'reservations': None})
+            elif [r for r in reservations
+                  if r['resource_type'] == self.resource_type]:
+                non_free.append(
+                    {'network': network, 'reservations': reservations})
+
+        return free, non_free
+
+    def query_available_resources(self, start_date, end_date):
+        def resource_usage_by_event(event, resource_type):
+            return event['reservation']['network_reservation'][resource_type]
+
+        all_networks = db_api.network_get_all_by_queries([])
+        free_networks, reserved_networks = self.filter_networks_by_reservation(
+            all_networks,
+            start_date - datetime.timedelta(minutes=CONF.cleaning_time),
+            end_date + datetime.timedelta(minutes=CONF.cleaning_time))
+        print reserved_networks
+
+        reservations = []
+        for network_info in reserved_networks:
+            print network_info
+            network = network_info['network']
+            reservations += network_info['reservations']
+
+        events_list = []
+        for r in reservations:
+            print r
+            fetched_events = db_api.event_get_all_sorted_by_filters(
+                sort_key='time', sort_dir='asc',
+                filters={'lease_id': r['lease_id']})
+            events_list.extend([{'event': e, 'reservation': r}
+                                for e in fetched_events])
+
+        events_list.sort(key=lambda x: x['event']['time'])
+
+        max_vfcs = max_vfc_resources = 0
+        current_vfcs = current_vfc_resources = 0
+
+        for event in events_list:
+            print event
+            if event['event']['event_type'] == 'start_lease':
+                # TODO(priteau): This doesn't yet take into account networks
+                # sharing a single VFC
+                current_vfcs += 1
+                current_vfc_resources += resource_usage_by_event(event, 'vfc_resources')
+                if max_vfcs < current_vfcs:
+                    max_vfcs = current_vfcs
+                if max_vfc_resources < current_vfc_resources:
+                    max_vfc_resources = current_vfc_resources
+            elif event['event']['event_type'] == 'end_lease':
+                current_vfcs -= 1
+                current_vfc_resources -= resource_usage_by_event(event, 'vfc_resources')
+
+        return (CONF[self.resource_type].available_vfcs - max_vfcs,
+                CONF[self.resource_type].available_vfc_resources - max_vfc_resources)
+
+    def check_vfc_resources(self, reservation_id, values):
+        query_params = {
+            'vfc_resources': values['vfc_resources'],
+            'start_date': values['start_date'],
+            'end_date': values['end_date']
+            }
+
+        free_vfcs, free_vfc_resources = self.query_available_resources(
+            **query_params)
+
+        if free_vfcs < 1:
+            raise manager_ex.NotEnoughNetworksAvailable(
+                "The reservation cannot be accommodated because no free VFC "
+                "is available.")
+
+        if free_vfc_resources < values['vfc_resources']:
+            raise manager_ex.NotEnoughNetworksAvailable(
+                "The reservation cannot be accommodated because not enough "
+                "VFC resources are available.")
+
     def reserve_resource(self, reservation_id, values):
         """Create reservation."""
         self._check_params(values)
@@ -67,6 +167,9 @@ class NetworkPlugin(base.BasePlugin):
         )
         if not network_ids:
             raise manager_ex.NotEnoughNetworksAvailable()
+
+        values['vfc_resources'] = CONF[self.resource_type].resources_per_vfc
+        hosts = self.check_vfc_resources(reservation_id, values)
 
         # NOTE(priteau): Check if we have enough available SUs for this
         # reservation. This takes into account the su_factor of each allocated

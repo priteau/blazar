@@ -1109,6 +1109,7 @@ def network_get_all_by_queries(queries):
         else:
             pass
             # looking for extra capabilities matches
+            # TODO(priteau): Test this code
 #            extra_filter = model_query(
 #                models.NetworkSegmentExtraCapability, get_session()
 #            ).filter(models.NetworkSegmentExtraCapability.capability_name == key
