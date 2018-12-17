@@ -438,6 +438,9 @@ class NetworkPlugin(base.BasePlugin):
             raise manager_ex.MissingParameter(param=','.join(missing_attr))
 
     def create_network(self, values):
+        if 'trust_id' in values:
+            del values['trust_id']
+
         # TODO(priteau): check that no network is using this segmentation_id
         self.validate_network_param(values)
         network_type = values.get('network_type')
