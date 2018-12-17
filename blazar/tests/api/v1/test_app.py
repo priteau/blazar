@@ -19,8 +19,8 @@ from oslo_config import cfg
 from werkzeug import exceptions as werkzeug_exceptions
 
 from blazar.api.v1 import app
-from blazar.api.v1.oshosts import v1_0 as host_api_v1_0
 from blazar.api.v1.networks import v1_0 as network_api_v1_0
+from blazar.api.v1.oshosts import v1_0 as host_api_v1_0
 from blazar.api.v1 import utils as api_utils
 from blazar import tests
 

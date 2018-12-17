@@ -20,8 +20,8 @@ from random import shuffle
 from ironicclient import client as ironic_client
 from keystoneauth1 import identity
 from keystoneauth1 import session
-from neutronclient.v2_0 import client as neutron_client
 from neutronclient.common import exceptions as neutron_ex
+from neutronclient.v2_0 import client as neutron_client
 from oslo_config import cfg
 from oslo_log import log as logging
 
@@ -40,7 +40,8 @@ plugin_opts = [
                help='Number of VFCs available for allocation to users'),
     cfg.IntOpt('available_vfc_resources',
                default=100,
-               help='Amount of resources available for VFCs allocated to users'),
+               help='Amount of resources available for VFCs allocated to '
+                    'users'),
     cfg.IntOpt('resources_per_vfc',
                default=2,
                help='Default amount of resources allocated for each VFC'),
@@ -74,7 +75,6 @@ class NetworkPlugin(base.BasePlugin):
         for network in networks:
             reservations = db_utils.get_reservations_by_network_id(
                 network['id'], start_date, end_date)
-            print reservations
 
             if reservations == []:
                 free.append({'network': network, 'reservations': None})
@@ -94,17 +94,13 @@ class NetworkPlugin(base.BasePlugin):
             all_networks,
             start_date - datetime.timedelta(minutes=CONF.cleaning_time),
             end_date + datetime.timedelta(minutes=CONF.cleaning_time))
-        print reserved_networks
 
         reservations = []
         for network_info in reserved_networks:
-            print network_info
-            network = network_info['network']
             reservations += network_info['reservations']
 
         events_list = []
         for r in reservations:
-            print r
             fetched_events = db_api.event_get_all_sorted_by_filters(
                 sort_key='time', sort_dir='asc',
                 filters={'lease_id': r['lease_id']})
@@ -117,22 +113,24 @@ class NetworkPlugin(base.BasePlugin):
         current_vfcs = current_vfc_resources = 0
 
         for event in events_list:
-            print event
             if event['event']['event_type'] == 'start_lease':
                 # TODO(priteau): This doesn't yet take into account networks
                 # sharing a single VFC
                 current_vfcs += 1
-                current_vfc_resources += resource_usage_by_event(event, 'vfc_resources')
+                current_vfc_resources += resource_usage_by_event(
+                    event, 'vfc_resources')
                 if max_vfcs < current_vfcs:
                     max_vfcs = current_vfcs
                 if max_vfc_resources < current_vfc_resources:
                     max_vfc_resources = current_vfc_resources
             elif event['event']['event_type'] == 'end_lease':
                 current_vfcs -= 1
-                current_vfc_resources -= resource_usage_by_event(event, 'vfc_resources')
+                current_vfc_resources -= resource_usage_by_event(
+                    event, 'vfc_resources')
 
         return (CONF[self.resource_type].available_vfcs - max_vfcs,
-                CONF[self.resource_type].available_vfc_resources - max_vfc_resources)
+                CONF[self.resource_type].available_vfc_resources -
+                max_vfc_resources)
 
     def check_vfc_resources(self, reservation_id, values):
         free_vfcs, free_vfc_resources = self.query_available_resources(
@@ -153,7 +151,7 @@ class NetworkPlugin(base.BasePlugin):
         """Create reservation."""
         self._check_params(values)
 
-        lease = db_api.lease_get(values['lease_id'])
+#        lease = db_api.lease_get(values['lease_id'])
         network_ids = self._matching_networks(
             values['network_properties'],
             values['resource_properties'],
@@ -164,16 +162,16 @@ class NetworkPlugin(base.BasePlugin):
             raise manager_ex.NotEnoughNetworksAvailable()
 
         values['vfc_resources'] = CONF[self.resource_type].resources_per_vfc
-        hosts = self.check_vfc_resources(reservation_id, values)
+        self.check_vfc_resources(reservation_id, values)
 
         # NOTE(priteau): Check if we have enough available SUs for this
         # reservation. This takes into account the su_factor of each allocated
         # network, if present.
-###        try:
-###            self.usage_enforcer.check_usage_against_allocation(
-###                lease, allocated_network_ids=network_ids)
-###        except manager_ex.RedisConnectionError:
-###            pass
+#        try:
+#            self.usage_enforcer.check_usage_against_allocation(
+#                lease, allocated_network_ids=network_ids)
+#        except manager_ex.RedisConnectionError:
+#            pass
 
         network_rsrv_values = {
             'reservation_id': reservation_id,
@@ -205,13 +203,13 @@ class NetworkPlugin(base.BasePlugin):
             return
 
         # Check if we have enough available SUs for update
-        network_allocations = db_api.network_allocation_get_all_by_values(
-            reservation_id=reservation_id)
-###        try:
-###            self.usage_enforcer.check_usage_against_allocation_pre_update(
-###                values, lease, network_allocations)
-###        except manager_ex.RedisConnectionError:
-###            pass
+#        network_allocations = db_api.network_allocation_get_all_by_values(
+#            reservation_id=reservation_id)
+#        try:
+#            self.usage_enforcer.check_usage_against_allocation_pre_update(
+#                values, lease, network_allocations)
+#        except manager_ex.RedisConnectionError:
+#            pass
 
         dates_before = {'start_date': lease['start_date'],
                         'end_date': lease['end_date']}
@@ -330,7 +328,8 @@ class NetworkPlugin(base.BasePlugin):
         try:
             neutron.show_network(network_id)
         except neutron_ex.NetworkNotFoundClient:
-            LOG.info("Not deleting network %s as it could not be found", network_id)
+            LOG.info("Not deleting network %s as it could not be found",
+                     network_id)
             return
 
         try:
@@ -374,10 +373,11 @@ class NetworkPlugin(base.BasePlugin):
                 network_id=network_id, reservation_id=reservation_id)
 
     def on_end(self, resource_id):
+        """Delete the Neutron network created when the lease started.
+
+        We first need to delete associated Neutron resources.
         """
-        Delete the Neutron network created on start and associated Neutron
-        resources.
-        """
+
         network_reservation = db_api.network_reservation_get(resource_id)
         reservation_id = network_reservation['reservation_id']
 
@@ -701,17 +701,13 @@ class NetworkPlugin(base.BasePlugin):
             if len(network_ids_to_add) < min_networks:
                 raise manager_ex.NotEnoughNetworksAvailable()
 
-        allocs_to_keep = [a for a in allocs if a not in allocs_to_remove]
-        allocs_to_add = [{'network_id': h} for h in network_ids_to_add]
-        new_allocations = allocs_to_keep + allocs_to_add
-
-###        try:
-###            self.usage_enforcer.check_usage_against_allocation_post_update(
-###                values, lease,
-###                allocs,
-###                new_allocations)
-###        except manager_ex.RedisConnectionError:
-###            pass
+#        try:
+#            self.usage_enforcer.check_usage_against_allocation_post_update(
+#                values, lease,
+#                allocs,
+#                new_allocations)
+#        except manager_ex.RedisConnectionError:
+#            pass
 
         for network_id in network_ids_to_add:
             LOG.debug('Adding network {} to reservation {}'.format(

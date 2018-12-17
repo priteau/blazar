@@ -929,7 +929,8 @@ def network_destroy(network_id):
 
         if not network:
             # raise not found error
-            raise db_exc.BlazarDBNotFound(id=network_id, model='Network segment')
+            raise db_exc.BlazarDBNotFound(
+                id=network_id, model='Network segment')
 
         session.delete(network)
 
@@ -1109,29 +1110,29 @@ def network_get_all_by_queries(queries):
         else:
             pass
             # looking for extra capabilities matches
-            # TODO(priteau): Test this code
-#            extra_filter = model_query(
-#                models.NetworkSegmentExtraCapability, get_session()
-#            ).filter(models.NetworkSegmentExtraCapability.capability_name == key
-#                     ).all()
-#            if not extra_filter:
-#                raise db_exc.BlazarDBNotFound(
-#                    id=key, model='NetworkSegmentExtraCapability')
-#
-#            for network in extra_filter:
-#                if op in oper and oper[op][1](network.capability_value, value):
-#                    networks.append(network.network_id)
-#                elif op not in oper:
-#                    msg = 'Operator %s for extra capabilities not implemented'
-#                    raise NotImplementedError(msg % op)
-#
+            extra_filter = model_query(
+                models.NetworkSegmentExtraCapability, get_session()
+            ).filter(models.NetworkSegmentExtraCapability.capability_name ==
+                     key).all()
+            if not extra_filter:
+                raise db_exc.BlazarDBNotFound(
+                    id=key, model='NetworkSegmentExtraCapability')
+
+            for network in extra_filter:
+                if op in oper and oper[op][1](network.capability_value, value):
+                    networks.append(network.network_id)
+                elif op not in oper:
+                    msg = 'Operator %s for extra capabilities not implemented'
+                    raise NotImplementedError(msg % op)
+
             # We must also avoid selecting any network which doesn't have the
             # extra capability present.
             all_networks = [h.id for h in networks_query.all()]
-            #extra_filter_networks = [h.network_id for h in extra_filter]
-            #networks += [h for h in all_networks if h not in extra_filter_networks]
+            extra_filter_networks = [h.network_id for h in extra_filter]
+            networks += [h for h in all_networks if h not in
+                         extra_filter_networks]
 
-    return networks_query.all() #.filter(~models.NetworkSegment.id.in_(networks)).all()
+    return networks_query.filter(~models.NetworkSegment.id.in_(networks)).all()
 
 
 def reservable_network_get_all_by_queries(queries):

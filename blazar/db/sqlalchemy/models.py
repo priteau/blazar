@@ -258,11 +258,8 @@ class NetworkSegment(mb.BlazarBase):
     )
 
     id = _id_column()
-    # The physical mechanism by which the virtual network is implemented. For example: flat, geneve, gre, local, vlan, vxlan.
     network_type = sa.Column(sa.String(255), nullable=False)
-    # Name of the physical network over which the virtual network is implemented
     physical_network = sa.Column(sa.String(255), nullable=True)
-    # VLAN ID for VLAN networks or Tunnel ID for GENEVE/GRE/VXLAN networks
     segment_id = sa.Column(sa.Integer, nullable=False)
 
     def to_dict(self):
@@ -316,7 +313,8 @@ class NetworkSegmentExtraCapability(mb.BlazarBase):
     __tablename__ = 'networksegment_extra_capabilities'
 
     id = _id_column()
-    network_id = sa.Column(sa.String(36), sa.ForeignKey('network_segments.id'), nullable=False)
+    network_id = sa.Column(sa.String(36), sa.ForeignKey('network_segments.id'),
+                           nullable=False)
     capability_name = sa.Column(sa.String(64), nullable=False)
     capability_value = sa.Column(MediumText(), nullable=False)
 

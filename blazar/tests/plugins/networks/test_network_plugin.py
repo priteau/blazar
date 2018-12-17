@@ -407,27 +407,34 @@ class NetworkPluginTestCase(tests.TestCase):
             {
                 'lease_id': 'lease-1',
                 'resource_type': plugin.RESOURCE_TYPE,
-                'network_reservation': { 'vfc_resources': 2 }
+                'network_reservation': {'vfc_resources': 2}
             },
             {
                 'lease_id': 'lease-2',
                 'resource_type': plugin.RESOURCE_TYPE,
-                'network_reservation': { 'vfc_resources': 5 }
+                'network_reservation': {'vfc_resources': 5}
             },
         ]
 
-        network_get_all_by_queries = self.patch(db_api, 'network_get_all_by_queries')
-        network_get_all_by_queries.return_value = [{'id': 'network-1'}, {'id': 'network-2'}]
+        network_get_all_by_queries = self.patch(
+            db_api, 'network_get_all_by_queries')
+        network_get_all_by_queries.return_value = [
+            {'id': 'network-1'},
+            {'id': 'network-2'}
+        ]
         fake_get_reservations = self.patch(self.db_utils,
                                            'get_reservations_by_network_id')
-        fake_get_reservations.side_effect = [[reservations[0]], [reservations[1]]]
+        fake_get_reservations.side_effect = [
+            [reservations[0]],
+            [reservations[1]]
+        ]
         mock_event_get = self.patch(db_api, 'event_get_all_sorted_by_filters')
         mock_event_get.side_effect = fake_event_get
 
         expected = (available_vfcs - 2, available_vfc_resources - 7)
         ret = self.fake_network_plugin.query_available_resources(
-            datetime.datetime(2030, 01, 01, 07, 00),
-            datetime.datetime(2030, 01, 01, 15, 00))
+            datetime.datetime(2030, 1, 1, 7, 0),
+            datetime.datetime(2030, 1, 1, 15, 0))
 
         self.assertEqual(expected, ret)
 
@@ -544,13 +551,11 @@ class NetworkPluginTestCase(tests.TestCase):
         lease_get.return_value = lease
         network_reservation_create = self.patch(self.db_api,
                                                 'network_reservation_create')
-        network_get_all_by_queries = self.patch(self.db_api,
-                                                'network_get_all_by_queries')
         matching_networks = self.patch(self.fake_network_plugin,
                                        '_matching_networks')
         matching_networks.return_value = ['network1', 'network2']
         query_available_resources = self.patch(self.fake_network_plugin,
-                                              'query_available_resources')
+                                               'query_available_resources')
         query_available_resources.return_value = (1, 2)
         network_allocation_create = self.patch(
             self.db_api,
