@@ -135,14 +135,9 @@ class NetworkPlugin(base.BasePlugin):
                 CONF[self.resource_type].available_vfc_resources - max_vfc_resources)
 
     def check_vfc_resources(self, reservation_id, values):
-        query_params = {
-            'vfc_resources': values['vfc_resources'],
-            'start_date': values['start_date'],
-            'end_date': values['end_date']
-            }
-
         free_vfcs, free_vfc_resources = self.query_available_resources(
-            **query_params)
+            values['start_date'],
+            values['end_date'])
 
         if free_vfcs < 1:
             raise manager_ex.NotEnoughNetworksAvailable(
