@@ -1174,7 +1174,7 @@ def network_extra_capability_get(network_extra_capability_id):
 
 def _network_extra_capability_get_all_per_network(session, network_id):
     query = model_query(models.NetworkSegmentExtraCapability, session)
-    return query.filter_by(networksegment_id=network_id)
+    return query.filter_by(network_id=network_id)
 
 
 def network_extra_capability_get_all_per_network(network_id):

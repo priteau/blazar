@@ -316,7 +316,7 @@ class NetworkSegmentExtraCapability(mb.BlazarBase):
     __tablename__ = 'networksegment_extra_capabilities'
 
     id = _id_column()
-    networksegment_id = sa.Column(sa.String(36), sa.ForeignKey('network_segments.id'))
+    network_id = sa.Column(sa.String(36), sa.ForeignKey('network_segments.id'), nullable=False)
     capability_name = sa.Column(sa.String(64), nullable=False)
     capability_value = sa.Column(MediumText(), nullable=False)
 
