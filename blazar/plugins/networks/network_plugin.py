@@ -330,7 +330,7 @@ class NetworkPlugin(base.BasePlugin):
         try:
             neutron.show_network(network_id)
         except neutron_ex.NetworkNotFoundClient:
-            LOG.exception("Not deleting network %s", network_id)
+            LOG.info("Not deleting network %s as it could not be found", network_id)
             return
 
         try:
