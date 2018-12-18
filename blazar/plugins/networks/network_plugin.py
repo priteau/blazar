@@ -620,7 +620,7 @@ class NetworkPlugin(base.BasePlugin):
         if resource_properties:
             filter_array += plugins_utils.convert_requirements(
                 resource_properties)
-        for network in db_api.reservable_network_get_all_by_queries(
+        for network in db_api.network_get_all_by_queries(
                 filter_array):
             if not db_api.network_allocation_get_all_by_values(
                     network_id=network['id']):
