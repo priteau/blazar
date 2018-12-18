@@ -99,6 +99,16 @@ class Reservation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
                                            cascade="all,delete",
                                            backref='reservation',
                                            lazy='joined')
+    network_reservation = relationship('NetworkReservation',
+                                       uselist=False,
+                                       cascade="all,delete",
+                                       backref='reservation',
+                                       lazy='joined')
+    network_allocations = relationship('NetworkAllocation',
+                                       uselist=True,
+                                       cascade="all,delete",
+                                       backref='reservation',
+                                       lazy='joined')
 
     def to_dict(self):
         d = super(Reservation, self).to_dict()
