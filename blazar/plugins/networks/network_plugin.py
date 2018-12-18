@@ -151,7 +151,7 @@ class NetworkPlugin(base.BasePlugin):
         """Create reservation."""
         self._check_params(values)
 
-#        lease = db_api.lease_get(values['lease_id'])
+        lease = db_api.lease_get(values['lease_id'])
         network_ids = self._matching_networks(
             values['network_properties'],
             values['resource_properties'],
@@ -167,11 +167,11 @@ class NetworkPlugin(base.BasePlugin):
         # NOTE(priteau): Check if we have enough available SUs for this
         # reservation. This takes into account the su_factor of each allocated
         # network, if present.
-#        try:
-#            self.usage_enforcer.check_usage_against_allocation(
-#                lease, allocated_network_ids=network_ids)
-#        except manager_ex.RedisConnectionError:
-#            pass
+        try:
+            self.usage_enforcer.check_usage_against_allocation(
+                lease, allocated_network_ids=network_ids)
+        except manager_ex.RedisConnectionError:
+            pass
 
         network_rsrv_values = {
             'reservation_id': reservation_id,
@@ -203,13 +203,13 @@ class NetworkPlugin(base.BasePlugin):
             return
 
         # Check if we have enough available SUs for update
-#        network_allocations = db_api.network_allocation_get_all_by_values(
-#            reservation_id=reservation_id)
-#        try:
-#            self.usage_enforcer.check_usage_against_allocation_pre_update(
-#                values, lease, network_allocations)
-#        except manager_ex.RedisConnectionError:
-#            pass
+        network_allocations = db_api.network_allocation_get_all_by_values(
+            reservation_id=reservation_id)
+        try:
+            self.usage_enforcer.check_usage_against_allocation_pre_update(
+                values, lease, network_allocations)
+        except manager_ex.RedisConnectionError:
+            pass
 
         dates_before = {'start_date': lease['start_date'],
                         'end_date': lease['end_date']}
@@ -595,13 +595,6 @@ class NetworkPlugin(base.BasePlugin):
                 msg='The network is reserved.'
             )
 
-#        inventory = nova.NovaInventory()
-#        servers = inventory.get_servers_per_network(
-#            network['hypervisor_networkname'])
-#        if servers:
-#            raise manager_ex.HostHavingServers(
-#                network=network['hypervisor_networkname'], servers=servers)
-#
         try:
             db_api.network_destroy(network_id)
         except db_ex.BlazarDBException as e:
@@ -701,13 +694,17 @@ class NetworkPlugin(base.BasePlugin):
             if len(network_ids_to_add) < min_networks:
                 raise manager_ex.NotEnoughNetworksAvailable()
 
-#        try:
-#            self.usage_enforcer.check_usage_against_allocation_post_update(
-#                values, lease,
-#                allocs,
-#                new_allocations)
-#        except manager_ex.RedisConnectionError:
-#            pass
+        allocs_to_keep = [a for a in allocs if a not in allocs_to_remove]
+        allocs_to_add = [{'network_id': n} for n in network_ids_to_add]
+        new_allocations = allocs_to_keep + allocs_to_add
+
+        try:
+            self.usage_enforcer.check_usage_against_allocation_post_update(
+                values, lease,
+                allocs,
+                new_allocations)
+        except manager_ex.RedisConnectionError:
+            pass
 
         for network_id in network_ids_to_add:
             LOG.debug('Adding network {} to reservation {}'.format(
