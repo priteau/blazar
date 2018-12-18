@@ -570,7 +570,8 @@ class NetworkPluginTestCase(tests.TestCase):
             'status': 'pending',
             'before_end': 'default',
             'network_name': 'foo-net',
-            'description': ''
+            'description': '',
+            'vfc_resources': CONF[plugin.RESOURCE_TYPE].resources_per_vfc
         }
         network_reservation_create.assert_called_once_with(network_values)
         # self.check_usage_against_allocation.assert_called_once_with(
@@ -633,6 +634,7 @@ class NetworkPluginTestCase(tests.TestCase):
         }
         network_reservation_get = self.patch(
             self.db_api, 'network_reservation_get')
+        self.patch(self.db_api, 'network_allocation_get_all_by_values')
 
         self.fake_network_plugin.update_reservation(
             '706eb3bc-07ed-4383-be93-b32845ece672',
