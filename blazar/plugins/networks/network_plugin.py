@@ -180,7 +180,8 @@ class NetworkPlugin(base.BasePlugin):
             'status': 'pending',
             'before_end': values['before_end'],
             'network_name': values['network_name'],
-            'description': values.get('description')
+            'description': values.get('description'),
+            'vfc_resources': values['vfc_resources'],
         }
         network_reservation = db_api.network_reservation_create(
             network_rsrv_values)

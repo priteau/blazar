@@ -293,6 +293,7 @@ class NetworkReservation(mb.BlazarBase, mb.SoftDeleteMixinWithUuid):
     network_name = sa.Column(sa.String(255))
     description = sa.Column(sa.String(255))
     network_id = sa.Column(sa.String(255))
+    vfc_resources = sa.Column(sa.Integer)
 
     def to_dict(self):
         return super(NetworkReservation, self).to_dict()
