@@ -194,18 +194,25 @@ class NetworkPlugin(base.BasePlugin):
         """Update reservation."""
         reservation = db_api.reservation_get(reservation_id)
         lease = db_api.lease_get(reservation['lease_id'])
+        network_allocations = db_api.network_allocation_get_all_by_values(
+            reservation_id=reservation_id)
 
-        if (not [x for x in values.keys() if x in ['min', 'max',
-                                                   'network_properties',
+        if (not [x for x in values.keys() if x in ['network_properties',
                                                    'resource_properties']]
                 and values['start_date'] >= lease['start_date']
                 and values['end_date'] <= lease['end_date']):
             # Nothing to update
+            try:
+                self.usage_enforcer.check_usage_against_allocation_post_update(
+                    values, lease,
+                    network_allocations,
+                    network_allocations)
+            except manager_ex.RedisConnectionError:
+                pass
+
             return
 
         # Check if we have enough available SUs for update
-        network_allocations = db_api.network_allocation_get_all_by_values(
-            reservation_id=reservation_id)
         try:
             self.usage_enforcer.check_usage_against_allocation_pre_update(
                 values, lease, network_allocations)
