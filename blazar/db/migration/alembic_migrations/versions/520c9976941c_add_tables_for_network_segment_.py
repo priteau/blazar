@@ -27,6 +27,11 @@ down_revision = 'cffa05fd6878'
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
+
+
+def MediumText():
+    return sa.Text().with_variant(MEDIUMTEXT(), 'mysql')
 
 
 def upgrade():
@@ -47,7 +52,7 @@ def upgrade():
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('network_id', sa.String(length=36), nullable=False),
     sa.Column('capability_name', sa.String(length=64), nullable=False),
-    sa.Column('capability_value', sa.Variant(), nullable=False),
+    sa.Column('capability_value', MediumText(), nullable=False),
     sa.ForeignKeyConstraint(['network_id'], ['network_segments.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -70,8 +75,8 @@ def upgrade():
     sa.Column('deleted', sa.String(length=36), nullable=True),
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('reservation_id', sa.String(length=36), nullable=True),
-    sa.Column('resource_properties', sa.Variant(), nullable=True),
-    sa.Column('network_properties', sa.Variant(), nullable=True),
+    sa.Column('resource_properties', MediumText(), nullable=True),
+    sa.Column('network_properties', MediumText(), nullable=True),
     sa.Column('before_end', sa.String(length=36), nullable=True),
     sa.Column('network_name', sa.String(length=255), nullable=True),
     sa.Column('description', sa.String(length=255), nullable=True),
