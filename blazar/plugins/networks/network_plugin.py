@@ -329,7 +329,8 @@ class NetworkPlugin(base.BasePlugin):
             if node:
                 ironic.node.vif_detach(node, port['id'])
             else:
-                raise Exception("Expected to find attribute binding:host_id on port %s" % port['id'])
+                raise Exception("Expected to find attribute binding:host_id "
+                                "on port %s" % port['id'])
 
         neutron.delete_port(port['id'])
 
@@ -340,7 +341,8 @@ class NetworkPlugin(base.BasePlugin):
         neutron.remove_gateway_router(router_id)
         neutron.delete_router(router_id)
 
-    def delete_neutron_network(self, network_id, reservation_id, trust_id=None):
+    def delete_neutron_network(self, network_id, reservation_id,
+                               trust_id=None):
         neutron = self.neutron(trust_id=trust_id)
 
         try:
@@ -410,8 +412,8 @@ class NetworkPlugin(base.BasePlugin):
             db_api.network_allocation_destroy(allocation['id'])
         network_id = network_reservation['network_id']
 
-       # The call to delete must be done without trust_id so the admin role is
-       # used
+        # The call to delete must be done without trust_id so the admin role is
+        # used
         self.delete_neutron_network(network_id, reservation_id)
 
         reservation = db_api.reservation_get(
