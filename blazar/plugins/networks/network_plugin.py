@@ -249,26 +249,32 @@ class NetworkPlugin(base.BasePlugin):
             auth_url=auth_url,
             username=CONF.os_admin_username,
             password=CONF.os_admin_password,
+            project_name=CONF.os_admin_project_name,
             project_domain_name=CONF.os_admin_project_domain_name,
             user_domain_name=CONF.os_admin_user_domain_name)
         sess = session.Session(auth=auth)
         return ironic_client.get_client(1,
                                         session=sess,
-                                        os_ironic_api_version='latest',
-                                        region_name=CONF.os_region_name)
+                                        os_ironic_api_version='1.31',
+                                        os_region_name=CONF.os_region_name)
 
     def neutron(self, trust_id=None):
         auth_url = "%s://%s:%s/%s" % (CONF.os_auth_protocol,
                                       CONF.os_auth_host,
                                       CONF.os_auth_port,
                                       CONF.os_auth_prefix)
-        auth = identity.Password(
-            auth_url=auth_url,
-            username=CONF.os_admin_username,
-            password=CONF.os_admin_password,
-            project_domain_name=CONF.os_admin_project_domain_name,
-            user_domain_name=CONF.os_admin_user_domain_name,
-            trust_id=trust_id)
+        kwargs = {
+            'auth_url': auth_url,
+            'username': CONF.os_admin_username,
+            'password': CONF.os_admin_password,
+            'project_domain_name': CONF.os_admin_project_domain_name,
+            'user_domain_name': CONF.os_admin_user_domain_name
+        }
+        if trust_id is not None:
+            kwargs['trust_id'] = trust_id
+        else:
+            kwargs['project_name'] = CONF.os_admin_project_name
+        auth = identity.Password(**kwargs)
         sess = session.Session(auth=auth)
         neutron = neutron_client.Client(
             session=sess, region_name=CONF.os_region_name)
@@ -319,8 +325,12 @@ class NetworkPlugin(base.BasePlugin):
 
     def delete_port(self, neutron, ironic, port):
         if port['binding:vnic_type'] == 'baremetal':
-            node = port['binding:host_id']
-            ironic.node.vif_detach(node, port['id'])
+            node = port.get('binding:host_id')
+            if node:
+                ironic.node.vif_detach(node, port['id'])
+            else:
+                raise Exception("Expected to find attribute binding:host_id on port %s" % port['id'])
+
         neutron.delete_port(port['id'])
 
     def delete_subnet(self, neutron, subnet_id):
@@ -330,7 +340,7 @@ class NetworkPlugin(base.BasePlugin):
         neutron.remove_gateway_router(router_id)
         neutron.delete_router(router_id)
 
-    def delete_neutron_network(self, network_id, reservation_id, trust_id):
+    def delete_neutron_network(self, network_id, reservation_id, trust_id=None):
         neutron = self.neutron(trust_id=trust_id)
 
         try:
@@ -400,8 +410,9 @@ class NetworkPlugin(base.BasePlugin):
             db_api.network_allocation_destroy(allocation['id'])
         network_id = network_reservation['network_id']
 
-        self.delete_neutron_network(
-            network_id, reservation_id, lease['trust_id'])
+       # The call to delete must be done without trust_id so the admin role is
+       # used
+        self.delete_neutron_network(network_id, reservation_id)
 
         reservation = db_api.reservation_get(
             network_reservation['reservation_id'])
