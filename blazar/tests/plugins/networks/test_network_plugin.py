@@ -234,7 +234,7 @@ class NetworkPluginTestCase(tests.TestCase):
         self.db_network_update.assert_called_once_with(
             self.fake_network_id, network_values)
 
-    def test_update_host(self):
+    def test_update_network(self):
         network_values = {'foo': 'baz'}
 
         self.db_network_extra_capability_get_all_per_name.return_value = [
