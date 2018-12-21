@@ -83,7 +83,7 @@ def upgrade():
         sa.Column('network_properties', MediumText(), nullable=True),
         sa.Column('before_end', sa.String(length=36), nullable=True),
         sa.Column('network_name', sa.String(length=255), nullable=True),
-        sa.Column('description', sa.String(length=255), nullable=True),
+        sa.Column('network_description', sa.String(length=255), nullable=True),
         sa.Column('network_id', sa.String(length=255), nullable=True),
         sa.Column('vfc_resources', sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(['reservation_id'], ['reservations.id'], ),

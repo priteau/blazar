@@ -1,4 +1,4 @@
-# Copyright (c) 2013 Bull.
+# Copyright (c) 2018 StackHPC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -545,7 +545,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'end_date': datetime.datetime(2013, 12, 19, 21, 00),
             'resource_type': plugin.RESOURCE_TYPE,
             'network_name': 'foo-net',
-            'description': ''
+            'network_description': ''
         }
         lease_get = self.patch(self.db_api, 'lease_get')
         lease_get.return_value = lease
@@ -570,7 +570,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'status': 'pending',
             'before_end': 'default',
             'network_name': 'foo-net',
-            'description': '',
+            'network_description': '',
             'vfc_resources': CONF[plugin.RESOURCE_TYPE].resources_per_vfc
         }
         network_reservation_create.assert_called_once_with(network_values)
@@ -998,7 +998,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'id': '04de74e8-193a-49d2-9ab8-cba7b49e45e8',
             'network_id': None,
             'network_name': 'foo-net',
-            'description': None,
+            'network_description': None,
             'reservation_id': u'593e7028-c0d1-4d76-8642-2ffd890b324c'
         }
         network_allocation_get_all_by_values = self.patch(
@@ -1055,7 +1055,7 @@ class NetworkPluginTestCase(tests.TestCase):
             'id': '04de74e8-193a-49d2-9ab8-cba7b49e45e8',
             'network_id': None,
             'network_name': 'foo-net',
-            'description': None,
+            'network_description': None,
             'reservation_id': u'593e7028-c0d1-4d76-8642-2ffd890b324c'
         }
         network_allocation_get_all_by_values = self.patch(

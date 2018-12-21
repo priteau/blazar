@@ -180,7 +180,7 @@ class NetworkPlugin(base.BasePlugin):
             'status': 'pending',
             'before_end': values['before_end'],
             'network_name': values['network_name'],
-            'description': values.get('description'),
+            'network_description': values.get('network_description'),
             'vfc_resources': values['vfc_resources'],
         }
         network_reservation = db_api.network_reservation_create(
@@ -284,7 +284,7 @@ class NetworkPlugin(base.BasePlugin):
         """Creates a Neutron network using the allocated segment."""
         network_reservation = db_api.network_reservation_get(resource_id)
         network_name = network_reservation['network_name']
-        description = network_reservation['description']
+        network_description = network_reservation['network_description']
         reservation_id = network_reservation['reservation_id']
 
         # We need the lease to get to the trust_id
@@ -310,8 +310,9 @@ class NetworkPlugin(base.BasePlugin):
                 network_body['network']['provider:physical_network'] = (
                     physical_network)
 
-            if description:
-                network_body['network']['description'] = description
+            if network_description:
+                network_body['network']['network_description'] = (
+                    network_description)
 
             try:
                 network = neutron.create_network(body=network_body)
@@ -673,8 +674,8 @@ class NetworkPlugin(base.BasePlugin):
             if value not in values:
                 raise manager_ex.MissingParameter(param=value)
 
-        if 'description' in values:
-            values['description'] = str(values['description'])
+        if 'network_description' in values:
+            values['network_description'] = str(values['network_description'])
 
         if 'before_end' not in values:
             values['before_end'] = 'default'
