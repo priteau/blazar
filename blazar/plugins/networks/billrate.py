@@ -19,8 +19,8 @@ BILLRATE_EXTRA_KEY = 'su_factor'
 
 
 def network_billrate(network_id):
-    """Looks up the SU charging rate for the specified compute host."""
-    extra = db_api.host_extra_capability_get_latest_per_name(
+    """Looks up the SU charging rate for the specified network segment."""
+    extra = db_api.network_extra_capability_get_latest_per_name(
         network_id, BILLRATE_EXTRA_KEY
     )
     if extra:
