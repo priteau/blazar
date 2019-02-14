@@ -71,6 +71,7 @@ function configure_blazar {
 
     iniset_rpc_backend blazar $BLAZAR_CONF_FILE DEFAULT
     iniupdate_rpc_backend $BLAZAR_CONF_FILE DEFAULT
+    iniset $BLAZAR_CONF_FILE oslo_messaging_notifications driver messagingv2
 
     ACTUAL_FILTERS=$(iniget $NOVA_CONF filter_scheduler enabled_filters)
     if [[ -z "$ACTUAL_FILTERS" ]]; then
